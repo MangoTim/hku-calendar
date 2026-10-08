@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="12" fill="#003366"/>
+  <text x="50%" y="55%" text-anchor="middle" font-family="Inter,Arial,sans-serif"
+        font-size="34" font-weight="800" fill="#fff">U</text>
+  <rect x="0" y="48" width="64" height="6" fill="#c8102e"/>
+</svg>

@@ -1,0 +1,22 @@
+{
+  "name": "audit-server",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "express": "5.1.0",
+    "pg": "8.13.1",
+    "cors": "2.8.5"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.0",
+    "@types/pg": "8.11.10",
+    "@types/cors": "2.8.17",
+    "typescript": "5.7.2",
+    "@types/bun": "1.1.14"
+  }
+}
