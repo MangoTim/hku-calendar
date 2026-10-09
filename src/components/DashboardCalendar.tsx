@@ -235,7 +235,7 @@ function DashBookingChip({ b }: { b: Booking }) {
 
 function DashLeaveChip({ l }: { l: LeaveRecord }) {
   const u = USERS.find(x => x.id === l.userId);
-  const lastName = u?.displayName.split(' ').slice(-1)[0] || '—';
+  const name = u?.displayName || '—';
   const typeLabel = l.type.charAt(0) + l.type.slice(1).toLowerCase().replace('_', ' ');
   return (
     <Link
@@ -244,7 +244,7 @@ function DashLeaveChip({ l }: { l: LeaveRecord }) {
       title={`${u?.displayName || '—'} · ${typeLabel}${l.note ? ` · ${l.note}` : ''}`}
     >
       <strong className="chip__time" aria-hidden="true">🏖</strong>
-      <span className="chip__name">{escapeHtml(lastName)} · {escapeHtml(typeLabel)}</span>
+      <span className="chip__name">{escapeHtml(name)} · {escapeHtml(typeLabel)}</span>
     </Link>
   );
 }
