@@ -1,9 +1,17 @@
-// Topbar — user info + sign out. Mirrors app.js renderTopbar.
+// Topbar — hamburger (mobile) + title + user info + sign out. Mirrors app.js renderTopbar.
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { fmt } from '../lib/app';
 
-export function Topbar({ title }: { title: string }) {
+export function Topbar({
+  title,
+  menuOpen,
+  onToggleMenu,
+}: {
+  title: string;
+  menuOpen: boolean;
+  onToggleMenu: () => void;
+}) {
   const { session, signOut } = useAuth();
   const nav = useNavigate();
 
@@ -16,6 +24,15 @@ export function Topbar({ title }: { title: string }) {
 
   return (
     <header className="app__topbar">
+      <button
+        className="topbar__menu"
+        aria-label="Open menu"
+        aria-expanded={menuOpen}
+        aria-controls="appSidebar"
+        onClick={onToggleMenu}
+      >
+        ☰
+      </button>
       <div className="topbar__title">{title}</div>
       <div className="topbar__user">
         <div className="meta">

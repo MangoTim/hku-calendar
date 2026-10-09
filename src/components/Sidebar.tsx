@@ -1,4 +1,6 @@
 // Sidebar — role-based nav. Mirrors app.js renderSidebar.
+// On mobile the sidebar is hidden off-screen until the hamburger in Topbar opens it;
+// `open` + `onClose` drive the slide-in.
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -30,7 +32,7 @@ const AUDIT_ITEMS: NavItem[] = [
   { to: '/admin/system-logs',  label: 'System logs',    icon: '🧾' }
 ];
 
-function NavGroup({ title, items }: { title: string; items: NavItem[] }) {
+function NavGroup({ title, items, onNavigate }: { title: string; items: NavItem[]; onNavigate?: () => void }) {
   return (
     <div className="sidebar__group">
       <div className="sidebar__group-title">{title}</div>
@@ -39,6 +41,7 @@ function NavGroup({ title, items }: { title: string; items: NavItem[] }) {
           <NavLink
             key={item.to}
             to={item.to}
+            onClick={onNavigate}
             className={({ isActive }) => `sidebar__link ${isActive ? 'is-active' : ''}`}
           >
             <span className="ic" aria-hidden="true">{item.icon}</span>{item.label}
@@ -49,17 +52,17 @@ function NavGroup({ title, items }: { title: string; items: NavItem[] }) {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { ROLE } = useAuth();
   return (
-    <aside className="app__sidebar">
+    <aside id="appSidebar" className={`app__sidebar ${open ? 'app__sidebar--open' : ''}`}>
       <div className="sidebar__brand">
         <span className="brand-mark">U</span>
         <span>HKU · ENGG Intranet</span>
       </div>
-      <NavGroup title="Workspace" items={STAFF_ITEMS} />
-      {ROLE.isAdmin() && <NavGroup title="Admin" items={ADMIN_ITEMS} />}
-      {ROLE.canSeeAudit() && <NavGroup title="Compliance" items={AUDIT_ITEMS} />}
+      <NavGroup title="Workspace" items={STAFF_ITEMS} onNavigate={onClose} />
+      {ROLE.isAdmin() && <NavGroup title="Admin" items={ADMIN_ITEMS} onNavigate={onClose} />}
+      {ROLE.canSeeAudit() && <NavGroup title="Compliance" items={AUDIT_ITEMS} onNavigate={onClose} />}
       <div className="sidebar__spacer"></div>
       <div className="sidebar__footer">v0928 · Demo · Single-user</div>
     </aside>

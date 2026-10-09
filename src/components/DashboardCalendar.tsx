@@ -1,15 +1,20 @@
 // DashboardCalendar — unified month-view summary of bookings, leave, and task
 // deadlines for the Dashboard. Reuses the .cal table styles + Booking/Leave chip
 // variants from Bookings.tsx / Leave.tsx, plus a new .chip--task family for
-// task deadlines. Whole-org scope by default — the per-user lists are already
-// in the cards above this section.
+// task deadlines. Two scopes:
+//   - "All Teams"  → every booking / leave / task (whole-org, like before)
+//   - "My Calendar" → only items the signed-in user owns (bookedById / userId /
+//                     assigneeId). Useful on phones where the org-wide list
+//                     is too noisy.
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bookings, localISO } from '../lib/bookings';
 import { Leave } from '../lib/leave';
 import { Tasks } from '../lib/tasks';
-import { ROOMS, USERS, holidayName } from '../lib/data';
+import { ROOMS, USERS } from '../lib/data';
 import { todayISO, escapeHtml } from '../lib/app';
+import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import type { Booking, Leave as LeaveRecord, Task as TaskRecord } from '../lib/types';
 
 interface DayEntry {
@@ -18,11 +23,16 @@ interface DayEntry {
   tasks: TaskRecord[];
 }
 
+type Scope = 'all' | 'my';
 const HEAD: ReadonlyArray<string> = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function DashboardCalendar() {
+  const { session } = useAuth();
+  const { holidayName } = useHoliday();
   const today = todayISO();
   const [anchor, setAnchor] = useState<string>(today);
+  const [scope, setScope] = useState<Scope>('all');
+  const myUserId = session?.userId ?? -1;
 
   const shift = (delta: number) => {
     const d = new Date(anchor + 'T00:00:00');
@@ -32,7 +42,8 @@ export function DashboardCalendar() {
 
   // Bucket every entry by ISO date. Leave spans are expanded across days so a
   // multi-day leave entry shows on every day in its range. Tasks show only on
-  // their dueDate (and only if not already DONE).
+  // their dueDate (and only if not already DONE). When scope === 'my' we also
+  // filter each source down to the items the signed-in user owns.
   const byDate = useMemo<Record<string, DayEntry>>(() => {
     const out: Record<string, DayEntry> = {};
     const bump = (iso: string, source: keyof DayEntry, item: any) => {
@@ -42,10 +53,12 @@ export function DashboardCalendar() {
 
     for (const b of Bookings.all()) {
       if (b.status === 'CANCELLED' || !b.date) continue;
+      if (scope === 'my' && b.bookedById !== myUserId) continue;
       bump(b.date, 'bookings', b);
     }
     for (const l of Leave.all()) {
       if (l.status === 'CANCELLED' || !l.startDate || !l.endDate) continue;
+      if (scope === 'my' && l.userId !== myUserId) continue;
       const start = new Date(l.startDate + 'T00:00:00');
       const end = new Date(l.endDate + 'T00:00:00');
       const cursor = new Date(start);
@@ -59,10 +72,11 @@ export function DashboardCalendar() {
     }
     for (const t of Tasks.all()) {
       if (t.status === 'DONE' || !t.dueDate) continue;
+      if (scope === 'my' && t.assigneeId !== myUserId) continue;
       bump(t.dueDate, 'tasks', t);
     }
     return out;
-  }, []);
+  }, [scope, myUserId]);
 
   const d = new Date(anchor + 'T00:00:00');
   const { cells } = Bookings.buildMonthGrid(d);
@@ -110,7 +124,32 @@ export function DashboardCalendar() {
             </span>
           </div>
         </div>
-        <div className="btn-row" style={{ marginLeft: 'auto' }}>
+        <div
+          className="segmented"
+          role="tablist"
+          aria-label="Calendar scope"
+          style={{ marginLeft: 'auto' }}
+        >
+          <button
+            className={`segmented__btn ${scope === 'my' ? 'is-on' : ''}`}
+            onClick={() => setScope('my')}
+            role="tab"
+            aria-selected={scope === 'my'}
+            title="Only show my bookings, leave, and task deadlines"
+          >
+            My Calendar
+          </button>
+          <button
+            className={`segmented__btn ${scope === 'all' ? 'is-on' : ''}`}
+            onClick={() => setScope('all')}
+            role="tab"
+            aria-selected={scope === 'all'}
+            title="Show every team's bookings, leave, and task deadlines"
+          >
+            All Teams
+          </button>
+        </div>
+        <div className="btn-row">
           <button className="btn btn--sm" onClick={() => shift(-1)} aria-label="Previous month">← Prev</button>
           <button className="btn btn--sm" onClick={() => setAnchor(today)}>Today</button>
           <button className="btn btn--sm" onClick={() => shift(+1)} aria-label="Next month">Next →</button>

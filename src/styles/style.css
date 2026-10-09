@@ -266,6 +266,39 @@ a:hover { text-decoration: underline; }
 .btn--block { width: 100%; justify-content: center; }
 .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
+/* Segmented control — pill-shaped joined buttons used for the Dashboard
+   calendar scope toggle ("My Calendar" / "All Teams"). The active button
+   uses .is-on to invert to a white pill. */
+.segmented {
+  display: inline-flex;
+  background: var(--bg-muted, #f1f5f9);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 0;
+}
+.segmented__btn {
+  background: transparent;
+  border: 0;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted, #475569);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+.segmented__btn:hover { color: var(--text, #0f172a); }
+.segmented__btn.is-on {
+  background: #fff;
+  color: var(--color-primary-2, #0b1e3a);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.segmented__btn:focus-visible {
+  outline: 2px solid var(--color-primary-2);
+  outline-offset: 1px;
+}
+
 .btn-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 
 /* ---------- Forms ---------- */
@@ -330,6 +363,15 @@ option:hover, option:focus, option:checked, option:active {
 .table th { background: var(--bg-muted); font-weight: 600; font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
 .table tr:hover td { background: #fafbff; }
 .table td.actions { white-space: nowrap; text-align: right; }
+/* <code> defaults to white-space: pre, which makes long identifiers like
+   `nextval('audit_events_id_seq'::regclass)` bleed past the column on narrow
+   screens. Wrap inside table cells so DB-inspector defaults stay in-bounds. */
+.table code,
+.table td code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
 
 /* ---------- Badges / tags ---------- */
 .badge {
@@ -638,7 +680,10 @@ option:hover, option:focus, option:checked, option:active {
   border: 1px solid var(--border);
   padding: 6px;
   vertical-align: top;
-  height: 96px;
+  /* min-height (not height) — long holiday names like
+   "The day following the Chinese Mid-Autumn Festival (substitute day)"
+   need 6+ lines, which would overflow a fixed-height cell on a phone. */
+  min-height: 96px;
   font-size: 12px;
 }
 .cal th {
@@ -796,31 +841,59 @@ option:hover, option:focus, option:checked, option:active {
   font-size: 12px;
 }
 
+/* ---------- Hamburger menu (mobile drawer) ---------- */
+.topbar__menu {
+  display: none;
+  background: transparent; border: 0; padding: 6px 10px;
+  font-size: 20px; line-height: 1; cursor: pointer;
+  color: var(--text);
+  border-radius: 6px;
+  align-items: center; justify-content: center;
+}
+.topbar__menu:hover { background: rgba(0, 0, 0, 0.06); }
+.topbar__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app__backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 19;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 960px) {
-  :root { --sidebar-w: 200px; }
-}
-@media (max-width: 760px) {
+  .topbar__menu { display: inline-flex; }
   .app {
     grid-template-columns: 1fr;
-    grid-template-rows: var(--topbar-h) auto 1fr;
     grid-template-areas:
       "topbar"
-      "sidebar"
       "main";
   }
   .app__sidebar {
-    position: relative; height: auto;
-    flex-direction: row; align-items: center;
-    overflow-x: auto;
-    padding: var(--space-2) var(--space-3);
+    position: fixed; top: 0; left: 0;
+    width: var(--sidebar-w); height: 100vh;
+    z-index: 20;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
   }
-  .sidebar__brand, .sidebar__group-title, .sidebar__footer { display: none; }
-  .sidebar__group { padding: 0; }
-  .sidebar__nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
-  .sidebar__link { white-space: nowrap; }
+  .app__sidebar.app__sidebar--open { transform: translateX(0); }
+  .app--menu-open .app__backdrop { opacity: 1; pointer-events: auto; }
+  body.menu-open { overflow: hidden; }
   .app__main { padding: var(--space-3); }
-  .cal th, .cal td { height: 64px; font-size: 11px; }
+  /* min-height (not height) — long holiday/event text can grow the cell. */
+  .cal th, .cal td { min-height: 64px; font-size: 11px; }
+  /* Truncate long room names inside booking chips on narrow screens so the
+     chip stays one line and doesn't push siblings out of the cell. */
+  .cal .chip {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 }
 
 /* ---------- Utility (focus, sr-only) ---------- */
