@@ -1,9 +1,10 @@
-// Settings module — task alert days, holidays, database, backup. LS persistence.
-import type { TaskSettings, Holiday, DatabaseConfig, BackupConfig } from './types';
-import { TASK_SETTINGS, HOLIDAYS_FLAT, DATABASE_CONFIG, BACKUP_CONFIG } from './data';
+// Settings module — task alert days, database, backup. LS persistence.
+// (Phase 14: holiday storage moved to the .103 API; see
+// `src/contexts/HolidayContext.tsx` and `src/lib/api/holidays.ts`.)
+import type { TaskSettings, DatabaseConfig, BackupConfig } from './types';
+import { TASK_SETTINGS, DATABASE_CONFIG, BACKUP_CONFIG } from './data';
 
 const LS_KEY_SETTINGS = 'engg_user_settings';
-const LS_KEY_HOLIDAYS = 'engg_user_holidays';
 const LS_KEY_DATABASE = 'engg_user_database_config';
 const LS_KEY_BACKUP = 'engg_user_backup_config';
 
@@ -12,13 +13,6 @@ function loadUserSettings(): Partial<TaskSettings> | null {
 }
 function persistUserSettings(s: Partial<TaskSettings>): void {
   try { localStorage.setItem(LS_KEY_SETTINGS, JSON.stringify(s)); } catch { /* ignore */ }
-}
-
-function loadUserHolidays(): Holiday[] {
-  try { return JSON.parse(localStorage.getItem(LS_KEY_HOLIDAYS) || '[]'); } catch { return []; }
-}
-function persistUserHolidays(list: Holiday[]): void {
-  try { localStorage.setItem(LS_KEY_HOLIDAYS, JSON.stringify(list)); } catch { /* ignore */ }
 }
 
 function loadUserDatabase(): DatabaseConfig | null {
@@ -38,65 +32,6 @@ export const Settings = {
     const v = Math.max(1, Math.min(90, Math.round(days)));
     persistUserSettings({ taskDeadlineAlertDays: v });
     return this.taskSettings();
-  },
-
-  // ---- Holidays ----
-  holidays(): Holiday[] {
-    // Merge seed + user (added) + user (removed, by date)
-    const removed: string[] = (() => {
-      try { return JSON.parse(localStorage.getItem(LS_KEY_HOLIDAYS + '_removed') || '[]'); } catch { return []; }
-    })();
-    const added = loadUserHolidays();
-    const removedSet = new Set(removed);
-    return [
-      ...HOLIDAYS_FLAT.filter(h => !removedSet.has(h.date)),
-      ...added
-    ].sort((a, b) => a.date.localeCompare(b.date));
-  },
-
-  holidaysForYear(year: number): Holiday[] {
-    return this.holidays().filter(h => h.date.startsWith(String(year)));
-  },
-
-  addHoliday(date: string, name: string): Holiday | null {
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-    if (!name.trim()) return null;
-    const trimmed = name.trim().slice(0, 100);
-    const existing = this.holidays();
-    if (existing.some(h => h.date === date)) return existing.find(h => h.date === date) || null;
-    const h: Holiday = { date, name: trimmed };
-    const list = loadUserHolidays();
-    list.push(h);
-    persistUserHolidays(list);
-    return h;
-  },
-
-  removeHoliday(date: string): boolean {
-    // Try removing from user-added list first
-    const added = loadUserHolidays();
-    const ai = added.findIndex(h => h.date === date);
-    if (ai >= 0) {
-      added.splice(ai, 1);
-      persistUserHolidays(added);
-      return true;
-    }
-    // Otherwise, mark the seed holiday as removed
-    try {
-      const removedRaw = localStorage.getItem(LS_KEY_HOLIDAYS + '_removed');
-      const removed: string[] = removedRaw ? JSON.parse(removedRaw) : [];
-      if (!removed.includes(date)) {
-        removed.push(date);
-        localStorage.setItem(LS_KEY_HOLIDAYS + '_removed', JSON.stringify(removed));
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  },
-
-  resetHolidays(): void {
-    localStorage.removeItem(LS_KEY_HOLIDAYS);
-    localStorage.removeItem(LS_KEY_HOLIDAYS + '_removed');
   },
 
   // ---- Database connection ----

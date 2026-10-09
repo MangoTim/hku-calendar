@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Leave } from '../lib/leave';
 import { localISO } from '../lib/app';
 import { Bookings } from '../lib/bookings';
-import { USERS, holidayName } from '../lib/data';
+import { USERS } from '../lib/data';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
 import type { Leave as LeaveRec } from '../lib/types';
 
@@ -195,6 +196,7 @@ function MonthGrid({ anchor, leaveOnDay }: {
   anchor: string;
   leaveOnDay: (iso: string) => LeaveRec[];
 }) {
+  const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
   const { cells } = Leave.buildMonthGrid(d);
   const month = d.getMonth();
@@ -247,6 +249,7 @@ function WeekGrid({ anchor, leaveOnDay }: {
   anchor: string;
   leaveOnDay: (iso: string) => LeaveRec[];
 }) {
+  const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
   const { cells } = Leave.buildWeekGrid(d);
 
@@ -305,6 +308,7 @@ function DayGrid({ anchor, leaveOnDay }: {
   anchor: string;
   leaveOnDay: (iso: string) => LeaveRec[];
 }) {
+  const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
   const iso = localISO(d);
   const isToday = iso === todayISO();

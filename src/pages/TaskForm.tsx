@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams, useParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Tasks } from '../lib/tasks';
-import { USERS, TASK_SETTINGS, holidayName } from '../lib/data';
+import { USERS, TASK_SETTINGS } from '../lib/data';
 import { escapeHtml, todayISO, addDaysISO } from '../lib/app';
 import type { TaskStatus, TaskPriority } from '../lib/types';
 
@@ -29,6 +30,7 @@ interface FormState {
 
 function TaskForm({ mode }: { mode: 'new' | 'edit' }) {
   const { user, ROLE } = useAuth();
+  const { holidayName } = useHoliday();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const pathParams = useParams<{ id: string }>();

@@ -9,6 +9,25 @@ import express from 'express';
 import cors from 'cors';
 import { initDb, getPool } from './db.ts';
 import { listBackups, saveBackup, loadBackup, deleteBackup, pruneOldBackups } from './backups.ts';
+import {
+  getMergedHolidays,
+  listImports,
+  addHoliday,
+  removeHoliday,
+  importHolidays,
+  removeImport,
+  resetHolidays
+} from './holidays.ts';
+import {
+  listTables,
+  listAllTablesWithColumns,
+  listForeignKeys,
+  sampleRows,
+  countRows,
+  refreshAllowList,
+  isAllowedTable
+} from './introspect.ts';
+import type { HolidayFormat } from '../../src/lib/types.ts';
 
 const PORT = Number(process.env.PORT || 8092);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -112,6 +131,132 @@ function rowToLog(r: any) {
     resolved: r.resolved
   };
 }
+
+// ----- Holidays -----
+// Demo: no auth at the API layer. The frontend gates the UI on
+// ROLE.isAdmin() (see src/contexts/HolidayContext.tsx). Production would
+// enforce ADMIN from a server-side user table or a signed token.
+app.get('/api/holidays', async (_req, res) => {
+  try {
+    const list = await getMergedHolidays();
+    res.json(list);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post('/api/holidays', async (req, res) => {
+  const b = req.body ?? {};
+  const userId = Number.isFinite(b.userId) ? Number(b.userId) : null;
+  try {
+    const r = await addHoliday(String(b.date || ''), String(b.name || ''), userId);
+    if (!r.ok) return res.status(409).json({ error: r.error });
+    res.status(201).json(r.holiday);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.delete('/api/holidays/:date', async (req, res) => {
+  const userId = Number.isFinite((req.body ?? {}).userId) ? Number((req.body ?? {}).userId) : null;
+  try {
+    const r = await removeHoliday(req.params.date, userId);
+    res.json({ ok: true, source: r.source });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post('/api/holidays/reset', async (_req, res) => {
+  try {
+    await resetHolidays();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ----- Holiday imports -----
+app.get('/api/holiday-imports', async (_req, res) => {
+  try {
+    res.json(await listImports());
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post('/api/holiday-imports', async (req, res) => {
+  const b = req.body ?? {};
+  const userId = Number.isFinite(b.userId) ? Number(b.userId) : null;
+  const items = Array.isArray(b.items) ? b.items : [];
+  const filename = String(b.filename || 'unknown');
+  const format = String(b.format || 'json') as HolidayFormat;
+  const importId = String(b.importId || '');
+  if (!importId) return res.status(400).json({ error: 'importId is required' });
+  if (items.length === 0) return res.status(400).json({ error: 'items is required' });
+  try {
+    const r = await importHolidays(items, { filename, format, importId }, userId);
+    res.status(201).json(r);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.delete('/api/holiday-imports/:importId', async (req, res) => {
+  try {
+    const n = await removeImport(req.params.importId);
+    res.json({ removed: n });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ----- DB inspector (read-only) -----
+// Demo: no auth at the API layer. The frontend gates /admin/database on
+// ROLE.isAdmin() via <RequireRole>. Production would enforce ADMIN from a
+// server-side user table. SQL-injection safety comes from the allow-list
+// cache: every /api/db/tables/:table/* request must hit a name that was
+// returned by the most recent /api/db/overview.
+app.get('/api/db/overview', async (_req, res) => {
+  try {
+    await refreshAllowList();
+    const [tables, fkEdges] = await Promise.all([
+      listAllTablesWithColumns('public'),
+      listForeignKeys('public')
+    ]);
+    res.json({ tables, fkEdges, schema: 'public', allowListSize: tables.length });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.get('/api/db/tables/:table/sample', async (req, res) => {
+  const table = req.params.table;
+  if (!isAllowedTable(table)) {
+    return res.status(400).json({ error: `unknown table: ${table}` });
+  }
+  const limit = Number(req.query.limit ?? 10);
+  const offset = Number(req.query.offset ?? 0);
+  try {
+    const r = await sampleRows(table, limit, offset);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.get('/api/db/tables/:table/count', async (req, res) => {
+  const table = req.params.table;
+  if (!isAllowedTable(table)) {
+    return res.status(400).json({ error: `unknown table: ${table}` });
+  }
+  try {
+    const n = await countRows(table);
+    res.json({ count: n });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
 
 // ----- Backups -----
 app.get('/api/backups', async (_req, res) => {

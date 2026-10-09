@@ -73,13 +73,8 @@ const HK_HOLIDAYS: Record<number, Holiday[]> = {
 export const HOLIDAYS_FLAT: Holiday[] = [
   ...HK_HOLIDAYS[2025], ...HK_HOLIDAYS[2026], ...HK_HOLIDAYS[2027]
 ];
-const HOLIDAY_SET = new Set(HOLIDAYS_FLAT.map(h => h.date));
-export function holidayName(date: string): string | null {
-  return HOLIDAYS_FLAT.find(h => h.date === date)?.name ?? null;
-}
-export function isHoliday(date: string): boolean {
-  return HOLIDAY_SET.has(date);
-}
+// NOTE: holidayName() and isHoliday() live in src/lib/settings.ts so they
+// merge user-added + imported holidays, not just the seeds above.
 
 // ---------------- Users (20 + 1 auditor) ----------------
 export const USERS: User[] = [

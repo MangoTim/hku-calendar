@@ -4,14 +4,16 @@ import { useState } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Leave } from '../lib/leave';
-import { USERS, holidayName } from '../lib/data';
+import { USERS } from '../lib/data';
 import { fmt, escapeHtml } from '../lib/app';
 
 export function LeaveDetail() {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const { user, ROLE } = useAuth();
+  const { holidayName } = useHoliday();
   const [, setRev] = useState(0);
   const justCreated = params.get('justCreated') === '1';
 
@@ -30,6 +32,8 @@ export function LeaveDetail() {
   const person = USERS.find(u => u.id === l.userId);
   const meta = Leave.typeMeta(l.type);
   const days = Leave.daysCount(l);
+  const startHol = holidayName(l.startDate);
+  const endHol = holidayName(l.endDate);
   const canEdit = ROLE.isAdmin() || ROLE.isTaskManager() || l.userId === user!.id;
   const canCancel = canEdit && l.status !== 'CANCELLED';
 
@@ -109,8 +113,8 @@ export function LeaveDetail() {
                 <th>Start</th>
                 <td>
                   {fmt.dateLong(l.startDate)}
-                  {holidayName(l.startDate) && (
-                    <> <span className="badge badge--warning">Holiday: {holidayName(l.startDate)}</span></>
+                  {startHol && (
+                    <> <span className="badge badge--warning">Holiday: {startHol}</span></>
                   )}
                 </td>
               </tr>
@@ -118,8 +122,8 @@ export function LeaveDetail() {
                 <th>End</th>
                 <td>
                   {fmt.dateLong(l.endDate)}
-                  {holidayName(l.endDate) && (
-                    <> <span className="badge badge--warning">Holiday: {holidayName(l.endDate)}</span></>
+                  {endHol && (
+                    <> <span className="badge badge--warning">Holiday: {endHol}</span></>
                   )}
                 </td>
               </tr>

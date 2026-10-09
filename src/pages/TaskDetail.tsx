@@ -4,8 +4,9 @@ import { useState, useEffect } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Tasks } from '../lib/tasks';
-import { USERS, holidayName } from '../lib/data';
+import { USERS } from '../lib/data';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
 import type { TaskProgress as TaskProgressRec } from '../lib/types';
 
@@ -20,6 +21,7 @@ export function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const { user, ROLE } = useAuth();
+  const { holidayName } = useHoliday();
   const [, setRev] = useState(0);
   const [flash, setFlash] = useState<Flash | null>(() => {
     try { return JSON.parse(sessionStorage.getItem('detailFlash') || 'null'); }
@@ -50,6 +52,7 @@ export function TaskDetail() {
   const assigner = USERS.find(u => u.id === t.assignedById);
   const pm = Tasks.priorityMeta(t.priority);
   const sm = Tasks.statusMeta(t.status);
+  const dueHol = t.dueDate ? holidayName(t.dueDate) : null;
   const justCreated = params.get('justCreated') === '1';
   const today = todayISO();
   const isOverdue = t.status !== 'DONE' && t.dueDate && t.dueDate < today;
@@ -122,8 +125,8 @@ export function TaskDetail() {
                 <th>Due</th>
                 <td>
                   {t.dueDate ? fmt.dateLong(t.dueDate) : <span className="text-muted">—</span>}
-                  {t.dueDate && holidayName(t.dueDate) && (
-                    <> <span className="badge badge--warning">Holiday: {holidayName(t.dueDate)}</span></>
+                  {dueHol && (
+                    <> <span className="badge badge--warning">Holiday: {dueHol}</span></>
                   )}
                   {isOverdue && <> <span className="badge badge--danger">Overdue</span></>}
                 </td>

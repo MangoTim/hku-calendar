@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams, useParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings } from '../lib/bookings';
-import { ROOMS, holidayName } from '../lib/data';
+import { ROOMS } from '../lib/data';
 import { escapeHtml, todayISO } from '../lib/app';
 
 export function BookingNew() {
@@ -32,6 +33,7 @@ interface FormState {
 
 function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
   const { user } = useAuth();
+  const { holidayName, loading: holidaysLoading } = useHoliday();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const pathParams = useParams<{ id: string }>();
@@ -99,10 +101,10 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
   }
 
   const hname = holidayName(form.date);
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    const v = Bookings.validate(form, editingId ?? undefined);
+    const v = await Bookings.validate(form, editingId ?? undefined, { holidayName });
     if (!v.ok) {
       setError(v.error);
       return;
@@ -284,8 +286,8 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
         </div>
         <div className="form__actions form__row--full" style={{ gridColumn: '1 / -1' }}>
           <Link className="btn" to={backHref}>Cancel</Link>
-          <button type="submit" className="btn btn--primary">
-            {mode === 'new' ? 'Save booking' : 'Save changes'}
+          <button type="submit" className="btn btn--primary" disabled={holidaysLoading}>
+            {holidaysLoading ? 'Loading holidays…' : (mode === 'new' ? 'Save booking' : 'Save changes')}
           </button>
         </div>
       </form>

@@ -2,6 +2,20 @@
 import pg from 'pg';
 import { AUDIT_EVENTS, SYSTEM_LOGS } from '../../src/lib/data.ts';
 
+// Coerce DATE / TIME columns to ISO strings at the driver layer so they
+// round-trip losslessly in any server timezone (the .105 / local / .103 VMs
+// don't all run in UTC). Without this, `new Date('2025-10-29')` from a DATE
+// column comes back as a local-midnight Date whose toISOString() shifts the
+// date by ±1 day. Type OIDs:
+//   1082 = date
+//   1083 = time
+//   1266 = timetz
+//   1114 = timestamp
+//   1184 = timestamptz → keep as Date (already correct)
+pg.types.setTypeParser(1082, (val: string) => val);        // date → 'YYYY-MM-DD'
+pg.types.setTypeParser(1083, (val: string) => val);        // time → 'HH:MM:SS'
+pg.types.setTypeParser(1266, (val: string) => val);        // timetz → 'HH:MM:SS+Z'
+
 const HOST = process.env.DB_HOST || '192.168.147.103';
 const PORT = Number(process.env.DB_PORT || 5432);
 const USER = process.env.DB_USER || 'postgres';
@@ -56,6 +70,34 @@ async function ensureSchema(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs (level);
+
+    -- Holiday storage (shared, org-wide). The HK 1823 canonical seed lives in
+    -- code (HOLIDAYS_FLAT imported from src/lib/data.ts) — only deltas are
+    -- persisted here: user-added/imported holidays + dates the admin has
+    -- chosen to hide from the seed.
+    CREATE TABLE IF NOT EXISTS holidays (
+      date DATE PRIMARY KEY,
+      name TEXT NOT NULL,
+      import_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_holidays_import_id ON holidays (import_id);
+
+    CREATE TABLE IF NOT EXISTS holiday_seed_removed (
+      date DATE PRIMARY KEY,
+      removed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      removed_by INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS holiday_imports (
+      import_id TEXT PRIMARY KEY,
+      filename TEXT NOT NULL,
+      format TEXT NOT NULL CHECK (format IN ('vcalendar','json','csv','xlsx')),
+      imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      imported_by INTEGER,
+      count INTEGER NOT NULL DEFAULT 0
+    );
   `);
   console.log('[db] schema ensured');
 }

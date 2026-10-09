@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams, useParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Leave } from '../lib/leave';
-import { USERS, holidayName } from '../lib/data';
+import { USERS } from '../lib/data';
 import { escapeHtml } from '../lib/app';
 import type { LeaveType } from '../lib/types';
 
@@ -27,6 +28,7 @@ interface FormState {
 
 function LeaveForm({ mode }: { mode: 'new' | 'edit' }) {
   const { user } = useAuth();
+  const { holidayName } = useHoliday();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const pathParams = useParams<{ id: string }>();

@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings, localISO } from '../lib/bookings';
-import { ROOMS, USERS, holidayName } from '../lib/data';
+import { ROOMS, USERS } from '../lib/data';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
 import type { Booking } from '../lib/types';
 
@@ -160,6 +161,7 @@ function MonthGrid({ anchor, bookingsOnDay }: {
   anchor: string;
   bookingsOnDay: (iso: string) => Booking[];
 }) {
+  const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
   const { cells } = Bookings.buildMonthGrid(d);
   const month = d.getMonth();
@@ -216,6 +218,7 @@ function WeekGrid({ anchor, bookingsOnDay }: {
   anchor: string;
   bookingsOnDay: (iso: string) => Booking[];
 }) {
+  const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
   const { cells } = Bookings.buildWeekGrid(d);
 
@@ -272,6 +275,7 @@ function DayGrid({ anchor, bookingsOnDay }: {
   anchor: string;
   bookingsOnDay: (iso: string) => Booking[];
 }) {
+  const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
   const iso = localISO(d);
   const isToday = iso === todayISO();

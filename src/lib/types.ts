@@ -121,7 +121,27 @@ export interface Notification {
 export interface Holiday {
   date: string;
   name: string;
+  /** Present iff this holiday was added via a file import. Used by
+   *  Settings.removeImport to find and delete every holiday from a given
+   *  import in one shot. Manual / seed holidays leave this undefined. */
+  importId?: string;
 }
+
+export interface HolidayImport {
+  /** Short hash of the source file content — same file re-imported updates
+   *  the existing record (idempotent). Different file = different id. */
+  importId: string;
+  /** Original filename for the UI ("hk-holidays.json"). */
+  filename: string;
+  /** Which parser produced this import. */
+  format: HolidayFormat;
+  /** ISO timestamp of the most recent import. */
+  importedAt: string;
+  /** Holidays currently in this import. Re-imports refresh this. */
+  count: number;
+}
+
+export type HolidayFormat = 'vcalendar' | 'json' | 'csv' | 'xlsx';
 
 export interface SsoConfig {
   mode: string;

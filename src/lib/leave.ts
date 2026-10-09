@@ -1,7 +1,7 @@
 // Leave module — port of static /assets/js/leave.js
 // Types · validation · ICS · date spans · holiday block · 2-week report
 import type { Leave as LeaveRecord, LeaveType } from './types';
-import { LEAVE, USERS, holidayName } from './data';
+import { LEAVE, USERS } from './data';
 import { localISO, todayISO, isPast, fmt } from './app';
 import { Bookings } from './bookings';
 
@@ -211,10 +211,7 @@ export const Leave = {
   startOfWeek: Bookings.startOfWeek,
   startOfMonth: Bookings.startOfMonth,
   buildMonthGrid: Bookings.buildMonthGrid,
-  buildWeekGrid: Bookings.buildWeekGrid,
-
-  // Re-exported for the UI banner
-  holidayName
+  buildWeekGrid: Bookings.buildWeekGrid
 };
 
 function escapeIcs(s: string): string {

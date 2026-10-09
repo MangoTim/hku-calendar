@@ -1,7 +1,7 @@
 // Bookings module — port of static /assets/js/bookings.js
 // FCFS · conflict · holiday · quantities · ICS · calendar grid helpers
 import type { Booking } from './types';
-import { BOOKINGS, ROOMS, USERS, holidayName } from './data';
+import { BOOKINGS, ROOMS, USERS } from './data';
 import { todayISO, isPast, localISO } from './app';
 
 const LS_KEY = 'engg_user_bookings';
@@ -81,11 +81,18 @@ export const Bookings = {
   },
 
   // ---------------- Validation ----------------
-  validate(input: Partial<Booking>, excludeBookingId?: number | string): { ok: true } | { ok: false; error: string } {
+  // Async because the holiday check needs the (remote, cached) holiday name.
+  // Callers pass the resolver from `useHoliday().holidayName` so the
+  // validator stays free of React context and can be unit-tested.
+  async validate(
+    input: Partial<Booking>,
+    excludeBookingId: number | string | undefined,
+    ctx: { holidayName: (d: string) => string | null }
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     const todayIso = todayISO();
     if (!input.date) return { ok: false, error: 'Date is required.' };
     if (isPast(input.date)) return { ok: false, error: 'Date cannot be in the past.' };
-    const hname = holidayName(input.date);
+    const hname = ctx.holidayName(input.date);
     if (hname) return { ok: false, error: `Date falls on a Hong Kong public holiday: ${hname}.` };
     if (!input.startTime || !input.endTime) return { ok: false, error: 'Start and end time are required.' };
     if (input.endTime <= input.startTime) return { ok: false, error: 'End time must be after start time.' };

@@ -1,14 +1,6 @@
 // Audit + System Logs — remote API client (proxied to :8092 via vite.config).
 import type { AuditEvent, SystemLog } from './types';
-
-async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(path, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) }
-  });
-  if (!r.ok) throw new Error(`${init?.method || 'GET'} ${path} → ${r.status}`);
-  return r.json();
-}
+import { jsonFetch } from './api/fetch';
 
 export const AuditEvents = {
   async all(): Promise<AuditEvent[]> {

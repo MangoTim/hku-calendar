@@ -1,10 +1,11 @@
 // Dashboard — welcome, upcoming bookings / leave / due-soon tasks / unread / announcements / quick links.
 // Port of static dashboard.html using the same data shapes.
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { AppShell } from '../components/AppShell';
 import {
   ROOMS, USERS,
-  TASK_SETTINGS, holidayName
+  TASK_SETTINGS
 } from '../lib/data';
 import { Tasks } from '../lib/tasks';
 import { Bookings } from '../lib/bookings';
@@ -19,6 +20,7 @@ const roomById = (id: number) => ROOMS.find(r => r.id === id) || null;
 
 export function Dashboard() {
   const { session, user, ROLE } = useAuth();
+  const { holidayName } = useHoliday();
   if (!session || !user) return null;
 
   const today = todayISO();

@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings } from '../lib/bookings';
-import { ROOMS, USERS, holidayName } from '../lib/data';
+import { ROOMS, USERS } from '../lib/data';
 import { fmt, escapeHtml } from '../lib/app';
 
 export function BookingDetail() {
@@ -13,6 +14,7 @@ export function BookingDetail() {
   const [params] = useSearchParams();
   const nav = useNavigate();
   const { user, ROLE } = useAuth();
+  const { holidayName } = useHoliday();
   const [, setRev] = useState(0); // force re-render after cancel
   const justCreated = params.get('justCreated') === '1';
 
@@ -85,10 +87,15 @@ export function BookingDetail() {
               <tr>
                 <th>Date</th>
                 <td>
-                  {fmt.dateLong(b.date)}
-                  {holidayName(b.date) && (
-                    <> <span className="badge badge--warning">Holiday: {holidayName(b.date)}</span></>
-                  )}
+                  {(() => {
+                    const hname = holidayName(b.date);
+                    return (
+                      <>
+                        {fmt.dateLong(b.date)}
+                        {hname && <> <span className="badge badge--warning">Holiday: {hname}</span></>}
+                      </>
+                    );
+                  })()}
                 </td>
               </tr>
               <tr><th>Time</th><td>{b.startTime} – {b.endTime}</td></tr>
