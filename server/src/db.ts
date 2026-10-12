@@ -185,6 +185,32 @@ async function seedIfEmpty(): Promise<void> {
     );
     console.log(`[db] seeded sso_config row from env (tenant=${tenant ? 'set' : 'empty'})`);
   }
+
+  // Bootstrap SSO admin from env. Solves the chicken-and-egg where the
+  // admin UI is gated by an sso_session cookie but no sso_users row exists
+  // yet for anyone to log in as. Reads SSO_SEED_ADMIN_EMAIL +
+  // SSO_SEED_ADMIN_NAME; no-op if either is missing OR a row with that
+  // email (case-insensitive) already exists. After bootstrap, admins
+  // create the rest of the allowlist via /admin/users.
+  const seedEmail = (process.env.SSO_SEED_ADMIN_EMAIL || '').trim();
+  const seedName  = (process.env.SSO_SEED_ADMIN_NAME  || '').trim();
+  if (seedEmail && seedName) {
+    const dupe = await pool!.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM sso_users WHERE lower(email) = lower($1)`,
+      [seedEmail]
+    );
+    if (Number(dupe.rows[0].count) === 0) {
+      const local = seedEmail.split('@')[0] || 'admin';
+      await pool!.query(
+        `INSERT INTO sso_users (email, display_name, username, role, team, title, enabled)
+         VALUES ($1, $2, $3, 'ADMIN', 'SSO', 'Initial SSO Admin', TRUE)`,
+        [seedEmail, seedName, local]
+      );
+      console.log(`[db] seeded initial SSO admin ${seedEmail} (display="${seedName}")`);
+    } else {
+      console.log(`[db] SSO_SEED_ADMIN_EMAIL ${seedEmail} already exists — skipping seed`);
+    }
+  }
 }
 
 export async function initDb(): Promise<void> {
