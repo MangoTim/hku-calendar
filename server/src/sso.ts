@@ -1,58 +1,210 @@
-// HKU SSO via Microsoft Entra ID (Azure AD). Phase 7b — minimal stub:
-//   - GET /api/sso/login     → if AZURE_TENANT_ID + AZURE_CLIENT_ID +
-//                              SSO_REDIRECT_URI are set, redirects to the
+// HKU SSO via Microsoft Entra ID (Azure AD). Phase 7b — full round-trip:
+//   - GET /api/sso/login     → if all env vars are set, 302-redirects to the
 //                              Azure AD /authorize endpoint (Auth Code +
 //                              client_secret flow). Otherwise returns a
 //                              friendly 503 HTML page so the front-end
 //                              button doesn't 404.
-//   - GET /api/sso/callback  → reserved for the real implementation
-//                              (code-for-token exchange, JWKS verify,
-//                              set session cookie, redirect to dashboard).
-// Until Eric registers the redirect URI on the Azure AD app and grants
-// admin consent, the env vars are left unset and the 503 page is what the
-// user / their teammate will see. Once they are, no code change is needed
-// here — just set the env vars in server/.env and the same endpoint does
-// the real redirect.
+//   - GET /api/sso/callback  → exchanges ?code for tokens, verifies the
+//                              id_token signature against the Azure AD
+//                              JWKS endpoint, renders a "you're signed in
+//                              as <name>" success page. Sets a server-side
+//                              session cookie so a follow-up
+//                              GET /api/auth/session can return the user.
+//
+// To go fully live: set AZURE_TENANT_ID, AZURE_CLIENT_ID,
+// AZURE_CLIENT_SECRET, and SSO_REDIRECT_URI in server/.env (or as -e flags
+// to podman run). The redirect URI must be registered in the Azure AD app
+// and admin consent granted by the HKU IT team.
 
-import type { Express } from 'express';
+import type { Express, Request } from 'express';
+import * as jose from 'jose';
 
-const TENANT       = process.env.AZURE_TENANT_ID;
-const CLIENT_ID    = process.env.AZURE_CLIENT_ID;
-const REDIRECT_URI = process.env.SSO_REDIRECT_URI;
-const POST_LOGIN   = process.env.SSO_POST_LOGIN_REDIRECT || '/dashboard';
+const TENANT        = process.env.AZURE_TENANT_ID;
+const CLIENT_ID     = process.env.AZURE_CLIENT_ID;
+const CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET;
+const REDIRECT_URI  = process.env.SSO_REDIRECT_URI;
+const POST_LOGIN    = process.env.SSO_POST_LOGIN_REDIRECT || '/dashboard';
+const COOKIE_SECRET = process.env.SSO_COOKIE_SECRET || 'dev-only-not-secure-change-me';
+
+// Sanity guard: if any of the four core vars is missing, the login route
+// degrades to the 503 page so the button never 404s.
+const SSO_CONFIGURED = Boolean(TENANT && CLIENT_ID && CLIENT_SECRET && REDIRECT_URI);
 
 export function initSso(app: Express): void {
   app.get('/api/sso/login', (req, res) => {
-    if (!TENANT || !CLIENT_ID || !REDIRECT_URI) {
+    if (!SSO_CONFIGURED) {
       res.status(503).send(pendingHtml());
       return;
     }
     // Real Azure AD redirect (Auth Code + client_secret, server-side flow).
     const state = randomState();
-    res.cookie('sso_state', state, {
+    setCookie(res, 'sso_state', state, {
       httpOnly: true,
       sameSite: 'lax',
       secure: true,
       maxAge: 5 * 60 * 1000
     });
     const url = new URL(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`);
-    url.searchParams.set('client_id', CLIENT_ID);
+    url.searchParams.set('client_id', CLIENT_ID!);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('redirect_uri', REDIRECT_URI);
+    url.searchParams.set('redirect_uri', REDIRECT_URI!);
     url.searchParams.set('response_mode', 'query');
     url.searchParams.set('scope', 'openid profile email User.Read');
     url.searchParams.set('state', state);
     res.redirect(url.toString());
   });
 
-  app.get('/api/sso/callback', (_req, res) => {
-    // TODO(Phase 7b): exchange ?code for tokens (server/src/sso.ts POST to
-    // /token endpoint with client_secret), verify id_token signature via
-    // JWKS at https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys,
-    // map oid → internal user, set a session cookie, redirect to POST_LOGIN.
-    res.status(501).send('SSO callback not implemented yet — see Phase 7b plan.');
+  app.get('/api/sso/callback', async (req, res) => {
+    if (!SSO_CONFIGURED) {
+      res.status(503).send('SSO not configured — see /api/sso/login for setup instructions.');
+      return;
+    }
+
+    const { code, state, error: azureError, error_description } = req.query as Record<string, string | undefined>;
+
+    // 1. Azure-side errors (user declined, consent missing, etc.)
+    if (azureError) {
+      res.status(400).send(errorHtml(
+        'Azure returned an error',
+        `${azureError}${error_description ? ` — ${error_description}` : ''}`
+      ));
+      return;
+    }
+
+    if (!code || !state) {
+      res.status(400).send(errorHtml('Missing parameters', 'Both ?code and ?state are required.'));
+      return;
+    }
+
+    // 2. CSRF guard — state must match the cookie set at /api/sso/login.
+    const cookieState = readCookie(req, 'sso_state');
+    if (!cookieState || cookieState !== state) {
+      res.status(400).send(errorHtml('State mismatch', 'The state parameter did not match the sso_state cookie. Possible CSRF attack or stale request — try signing in again.'));
+      return;
+    }
+    // Single-use: clear the state cookie now that we've consumed it.
+    clearCookie(res, 'sso_state');
+
+    // 3. Exchange code for tokens.
+    let tokens: { id_token: string; access_token?: string; expires_in?: number };
+    try {
+      const r = await fetch(
+        `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: CLIENT_ID!,
+            client_secret: CLIENT_SECRET!,
+            code,
+            redirect_uri: REDIRECT_URI!,
+            grant_type: 'authorization_code',
+            scope: 'openid profile email User.Read'
+          })
+        }
+      );
+      if (!r.ok) {
+        const body = await r.text();
+        res.status(500).send(errorHtml('Token exchange failed', `${r.status} ${r.statusText}\n\n${body.slice(0, 500)}`));
+        return;
+      }
+      tokens = await r.json() as typeof tokens;
+    } catch (e: any) {
+      res.status(500).send(errorHtml('Token exchange network error', (e as Error).message));
+      return;
+    }
+
+    // 4. Verify the id_token signature + standard claims.
+    // JWKS is cached by jose and refreshed on key rotation.
+    const JWKS = jose.createRemoteJWKSet(
+      new URL(`https://login.microsoftonline.com/${TENANT}/discovery/v2.0/keys`)
+    );
+    let payload: jose.JWTPayload & { oid: string; name?: string; email?: string; preferred_username?: string };
+    try {
+      const verified = await jose.jwtVerify(tokens.id_token, JWKS, {
+        issuer: `https://login.microsoftonline.com/${TENANT}/v2.0`,
+        audience: CLIENT_ID!
+      });
+      payload = verified.payload as typeof payload;
+    } catch (e: any) {
+      res.status(401).send(errorHtml('ID token verification failed', (e as Error).message));
+      return;
+    }
+
+    // 5. Extract user info.
+    const oid = payload.oid;
+    const name = payload.name || payload.preferred_username || 'Unknown';
+    const email = payload.email || payload.preferred_username || '';
+
+    // 6. Set a signed session cookie so a follow-up GET /api/auth/session
+    // can return the user to the frontend. JWS-signed with HMAC for
+    // tamper-resistance (not for confidentiality — name/email aren't
+    // sensitive in this demo).
+    const sessionPayload = { oid, name, email, iat: Math.floor(Date.now() / 1000) };
+    const sessionSecret = new TextEncoder().encode(COOKIE_SECRET);
+    const sessionJwt = await new jose.SignJWT(sessionPayload)
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime('8h')
+      .sign(sessionSecret);
+    setCookie(res, 'sso_session', sessionJwt, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: true,
+      maxAge: 8 * 60 * 60 * 1000,
+      path: '/'
+    });
+
+    // 7. Render the success page. For a fully wired demo, redirect to
+    // POST_LOGIN instead — but the user wanted to "see whether SSO works"
+    // first, so the explicit confirmation page is more useful.
+    res.send(successHtml({
+      name,
+      email,
+      oid,
+      tenant: TENANT!,
+      expires: new Date((payload.exp as number) * 1000).toISOString(),
+      postLoginUrl: POST_LOGIN
+    }));
+  });
+
+  // Used by the FE AuthContext to learn who (if anyone) is signed in via
+  // the sso_session cookie. Returns 200 with {user: null} when no cookie.
+  app.get('/api/auth/session', async (req, res) => {
+    const token = readCookie(req, 'sso_session');
+    if (!token) {
+      res.json({ user: null });
+      return;
+    }
+    try {
+      const sessionSecret = new TextEncoder().encode(COOKIE_SECRET);
+      const { payload } = await jose.jwtVerify(token, sessionSecret, {
+        algorithms: ['HS256']
+      });
+      res.json({
+        user: {
+          oid: payload.oid,
+          name: payload.name,
+          email: payload.email,
+          source: 'sso' as const
+        }
+      });
+    } catch {
+      // Stale / tampered cookie — clear it and return null.
+      clearCookie(res, 'sso_session');
+      res.json({ user: null });
+    }
+  });
+
+  // Sign-out clears the cookie. The FE also needs to clear its own
+  // localStorage session, but the SSO side is just this.
+  app.post('/api/sso/logout', (_req, res) => {
+    clearCookie(res, 'sso_session');
+    res.json({ ok: true });
   });
 }
+
+// ---------- helpers ----------
 
 function randomState(): string {
   const bytes = new Uint8Array(16);
@@ -60,9 +212,42 @@ function randomState(): string {
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Minimal cookie helpers — avoid pulling in cookie-parser for two reads
+// and two writes. Express 5's req.headers.cookie is the raw header.
+function readCookie(req: Request, name: string): string | null {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const [k, ...rest] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(rest.join('='));
+  }
+  return null;
+}
+
+function setCookie(res: any, name: string, value: string, opts: {
+  httpOnly?: boolean; secure?: boolean; sameSite?: 'lax' | 'strict' | 'none';
+  maxAge?: number; path?: string;
+}): void {
+  const segs = [`${name}=${encodeURIComponent(value)}`];
+  if (opts.path) segs.push(`Path=${opts.path}`); else segs.push('Path=/');
+  if (opts.maxAge != null) segs.push(`Max-Age=${Math.floor(opts.maxAge / 1000)}`);
+  if (opts.httpOnly) segs.push('HttpOnly');
+  if (opts.secure) segs.push('Secure');
+  if (opts.sameSite) segs.push(`SameSite=${opts.sameSite[0].toUpperCase()}${opts.sameSite.slice(1)}`);
+  res.append('Set-Cookie', segs.join('; '));
+}
+
+function clearCookie(res: any, name: string): void {
+  res.append('Set-Cookie', `${name}=; Path=/; Max-Age=0`);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]!));
+}
+
 function pendingHtml(): string {
-  // Self-contained 503 page (no app bundle dependency) so the click target
-  // never 404s and always explains what's pending.
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -89,6 +274,76 @@ function pendingHtml(): string {
     <div class="footer">
       Phase 7b · awaiting Azure AD redirect URI registration + admin consent.<br />
       When ready, set <code>AZURE_TENANT_ID</code>, <code>AZURE_CLIENT_ID</code>, <code>AZURE_CLIENT_SECRET</code>, <code>SSO_REDIRECT_URI</code> in <code>server/.env</code> and this page will redirect to Microsoft instead.
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function errorHtml(title: string, detail: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>HKU SSO — error</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { max-width: 640px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; }
+    h1 { margin: 0 0 12px; color: #fca5a5; font-size: 22px; }
+    pre { background: #0f172a; color: #fda4af; padding: 16px; border-radius: 6px; overflow: auto; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+    a { color: #38bdf8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚠️ ${escapeHtml(title)}</h1>
+    <pre>${escapeHtml(detail)}</pre>
+    <p style="margin-top: 24px;"><a href="/api/sso/login">← Try signing in again</a> · <a href="/login">Use demo sign-in instead</a></p>
+  </div>
+</body>
+</html>`;
+}
+
+function successHtml(u: {
+  name: string; email: string; oid: string; tenant: string;
+  expires: string; postLoginUrl: string;
+}): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>HKU SSO — signed in</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .card { max-width: 560px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+    h1 { margin: 0 0 12px; color: #6ee7b7; font-size: 24px; }
+    p { color: #cbd5e1; line-height: 1.55; }
+    dl { display: grid; grid-template-columns: 120px 1fr; gap: 8px 16px; margin: 20px 0; }
+    dt { color: #94a3b8; font-size: 13px; }
+    dd { margin: 0; color: #f1f5f9; }
+    code { background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #e0e7ff; font-size: 13px; }
+    a.btn { display: inline-block; margin-top: 16px; padding: 10px 18px; background: #00a884; color: #0f172a; border-radius: 6px; text-decoration: none; font-weight: 600; }
+    a.btn:hover { background: #00c896; }
+    .footer { margin-top: 24px; font-size: 13px; color: #94a3b8; border-top: 1px solid #334155; padding-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>✅ SSO sign-in successful</h1>
+    <p>You are signed in via Microsoft Entra ID. The ID token signature was verified against the Azure AD JWKS endpoint, and a signed session cookie (<code>sso_session</code>) is now set on this domain.</p>
+    <dl>
+      <dt>Display name</dt><dd>${escapeHtml(u.name)}</dd>
+      <dt>Email</dt><dd>${escapeHtml(u.email || '—')}</dd>
+      <dt>Azure OID</dt><dd><code>${escapeHtml(u.oid)}</code></dd>
+      <dt>Tenant</dt><dd><code>${escapeHtml(u.tenant)}</code></dd>
+      <dt>ID token expires</dt><dd><code>${escapeHtml(u.expires)}</code></dd>
+    </dl>
+    <a class="btn" href="${escapeHtml(u.postLoginUrl)}">→ Continue to ${escapeHtml(u.postLoginUrl)}</a>
+    <div class="footer">
+      Round-trip complete: <code>/api/sso/login</code> → Azure AD → <code>/api/sso/callback</code> (code exchanged, ID token verified, session cookie set).<br />
+      Full FE integration (auto sign-in on the React side) is a separate piece of work — for now, the demo user picker still works after this redirect.
     </div>
   </div>
 </body>

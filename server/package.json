@@ -10,7 +10,8 @@
   "dependencies": {
     "express": "5.1.0",
     "pg": "8.13.1",
-    "cors": "2.8.5"
+    "cors": "2.8.5",
+    "jose": "5.9.6"
   },
   "devDependencies": {
     "@types/express": "5.0.0",
