@@ -1,87 +1,47 @@
-// Admin database — connection settings (local) + DB inspector (live, read-only).
+// Admin database — live connection view + DB inspector.
 //
-// Card 1 (existing): edit / test / save / reset the connection settings that
-// get stored in localStorage. Affects the next launch of the *demo backend*,
-// not the live `.103/engg_intranet` server the API on `:8092` already speaks
-// to. Useful for demoing the "switch to SQL Server / SQLite" flow.
+// Card 1: read-only "Active connection" populated from /api/db/connection.
+// The connection is set at container build/run time via process.env.DB_*
+// (see server/src/db.ts:19-23). To "switch" the displayed DB, rebuild the
+// container with different env vars — no admin action needed here.
 //
-// Card 2 (new): live inspector against the .103 PostgreSQL DB the Express API
-// is connected to. Read-only, public schema only. Fetches on mount via
-// /api/db/overview, lets admins expand a table to see columns + first 10 rows
-// (with "Load 50 more" pagination), and lists foreign-key relationships.
+// Card 2: live inspector against the PostgreSQL DB the Express API is
+// connected to. Read-only, public schema only. Fetches on mount via
+// /api/db/overview, lets admins expand a table to see columns + first 10
+// rows (with "Load 50 more" pagination), and lists foreign-key
+// relationships.
 //
-// Authorization: this page is wrapped in <RequireRole allow=isAdmin> in App.tsx
-// — the Sidebar / route guard hides the menu link for non-ADMIN users. The
-// /api/db/* endpoints themselves have no API-layer auth (parity with audit
-// events + system logs + holidays — the frontend gate is the demo's gate).
+// Authorization: this page is wrapped in <RequireRole allow=isAdmin> in
+// App.tsx — the Sidebar / route guard hides the menu link for non-ADMIN
+// users. The /api/db/* endpoints themselves have no API-layer auth (parity
+// with audit events + system logs + holidays — the frontend gate is the
+// demo's gate).
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
-import { Settings } from '../lib/settings';
 import { fmt, escapeHtml } from '../lib/app';
-import { Db, type TableMeta, type ForeignKey } from '../lib/api/db';
+import { Db, type ConnectionResult, type TableMeta, type ForeignKey } from '../lib/api/db';
 
-const DB_TYPES = [
-  { value: 'SQLITE',    label: 'SQLite (local file)' },
-  { value: 'SQLSERVER', label: 'Microsoft SQL Server' },
-  { value: 'POSTGRES',  label: 'PostgreSQL' }
-];
-
-// ---------- Settings card (unchanged from before Phase 15) ----------
+// ---------- Active connection card (read-only, live from /api/db/connection) ----------
 export function AdminDatabase() {
-  const initial = Settings.databaseConfig();
-  const [form, setForm] = useState(initial);
-  const [password, setPassword] = useState(initial.passwordMasked ? '' : '');
+  const [conn, setConn] = useState<ConnectionResult | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [, setRev] = useState(0);
 
-  const onChange = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
-
-  const onSave = (e: React.FormEvent) => {
-    e.preventDefault();
+  const refresh = async () => {
+    setLoading(true);
     setError(null);
-    if (form.dbType !== 'SQLITE') {
-      if (!form.host.trim()) { setError('Host is required for SQL Server / PostgreSQL.'); return; }
-      if (!form.databaseName.trim()) { setError('Database name is required.'); return; }
-      if (!Number.isFinite(form.port) || form.port < 1 || form.port > 65535) {
-        setError('Port must be between 1 and 65535.');
-        return;
-      }
+    try {
+      const r = await Db.connection();
+      setConn(r);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to fetch connection info.');
+    } finally {
+      setLoading(false);
     }
-    const next = {
-      ...form,
-      passwordMasked: password ? maskPassword(password) : form.passwordMasked
-    };
-    Settings.setDatabaseConfig(next);
-    setForm(next);
-    setPassword('');
-    setSaved(true);
-    setRev(v => v + 1);
-    setTimeout(() => setSaved(false), 1500);
   };
 
-  const onTest = () => {
-    setError(null);
-    const tested = Settings.testDatabaseConnection({
-      ...form,
-      passwordMasked: password ? maskPassword(password) : form.passwordMasked
-    });
-    setForm(tested);
-    setPassword('');
-    setRev(v => v + 1);
-  };
-
-  const onReset = () => {
-    if (!confirm('Reset database settings back to seed defaults?')) return;
-    Settings.resetDatabase();
-    const fresh = Settings.databaseConfig();
-    setForm(fresh);
-    setPassword('');
-    setRev(v => v + 1);
-  };
-
-  const isSqlite = form.dbType === 'SQLITE';
+  useEffect(() => { refresh(); }, []);
 
   return (
     <AppShell title="Database">
@@ -89,7 +49,7 @@ export function AdminDatabase() {
         <div>
           <h1>Database connection</h1>
           <div className="page-header__sub">
-            Read/write settings for the intranet data store. Changes are saved to localStorage.
+            Live view of the PostgreSQL backend the API is connected to. Set at container build time via <code>DB_HOST</code> / <code>DB_PORT</code> / <code>DB_NAME</code> / <code>DB_USER</code> — rebuild to switch.
           </div>
         </div>
         <div className="page-header__actions">
@@ -101,177 +61,94 @@ export function AdminDatabase() {
         <div className="alert alert--danger" role="alert">⚠️ {escapeHtml(error)}</div>
       )}
 
-      {form.lastTestedAt && (
-        <div
-          className={`alert ${form.lastTestResult.startsWith('GOOD') ? 'alert--success' : form.lastTestResult.startsWith('FAIL') ? 'alert--danger' : 'alert--warning'}`}
-          role="status"
-        >
-          <strong>Last test:</strong> {escapeHtml(form.lastTestResult)} ·{' '}
-          <span className="text-muted text-sm">{fmt.dateTime(form.lastTestedAt)}</span>
-        </div>
-      )}
-
-      <form className="form card" onSubmit={onSave} noValidate>
-        <div className="form__row form__row--2">
-          <div className="form__row">
-            <label className="form__label" htmlFor="dbType">Database type</label>
-            <select
-              id="dbType"
-              className="form__select"
-              value={form.dbType}
-              onChange={e => onChange({ dbType: e.target.value })}
+      <section className="card">
+        <div className="card__head" style={{ flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Active connection</h2>
+            <div className="card__sub">
+              Source of truth: the Express API server on <code>:8092</code>.
+            </div>
+          </div>
+          <div className="btn-row" style={{ marginLeft: 'auto' }}>
+            {conn && (
+              <span
+                className={`badge ${conn.isReachable ? 'badge--success' : 'badge--danger'}`}
+                title={conn.isReachable ? 'Pool responded to SELECT 1' : conn.error || ''}
+              >
+                {conn.isReachable ? '● Connected' : '● Unreachable'}
+              </span>
+            )}
+            <button
+              className="btn btn--sm"
+              onClick={refresh}
+              disabled={loading}
+              title="Re-probe the pool + re-read env-derived config"
             >
-              {DB_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
-          </div>
-          <div className="form__row">
-            <label className="form__label" htmlFor="port">Port</label>
-            <input
-              id="port"
-              type="number"
-              className="form__input"
-              min={1}
-              max={65535}
-              value={form.port}
-              disabled={isSqlite}
-              onChange={e => onChange({ port: Number(e.target.value) })}
-            />
+              {loading ? 'Probing…' : '↻ Refresh'}
+            </button>
           </div>
         </div>
 
-        <div className="form__row form__row--2">
-          <div className="form__row">
-            <label className="form__label" htmlFor="host">Host</label>
-            <input
-              id="host"
-              type="text"
-              className="form__input"
-              value={form.host}
-              disabled={isSqlite}
-              maxLength={200}
-              placeholder={isSqlite ? '(not used for SQLite)' : 'sqlserver.engg.hku.hk'}
-              onChange={e => onChange({ host: e.target.value })}
-            />
-          </div>
-          <div className="form__row">
-            <label className="form__label" htmlFor="databaseName">Database name</label>
-            <input
-              id="databaseName"
-              type="text"
-              className="form__input"
-              value={form.databaseName}
-              disabled={isSqlite}
-              maxLength={100}
-              placeholder={isSqlite ? '(not used for SQLite)' : 'EnggIntranetDB'}
-              onChange={e => onChange({ databaseName: e.target.value })}
-            />
-          </div>
-        </div>
+        {loading && !conn && (
+          <div className="alert alert--info" role="status">Probing connection…</div>
+        )}
 
-        <div className="form__row form__row--2">
-          <div className="form__row">
-            <label className="form__label" htmlFor="username">Username</label>
-            <input
-              id="username"
-              type="text"
-              className="form__input"
-              value={form.username}
-              disabled={isSqlite}
-              maxLength={100}
-              onChange={e => onChange({ username: e.target.value })}
-            />
-          </div>
-          <div className="form__row">
-            <label className="form__label" htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              className="form__input"
-              value={password}
-              disabled={isSqlite}
-              placeholder={form.passwordMasked ? '(unchanged)' : ''}
-              maxLength={200}
-              onChange={e => setPassword(e.target.value)}
-              autoComplete="new-password"
-            />
-            <span className="form__hint text-muted">
-              Stored value: <code>{escapeHtml(form.passwordMasked || '(empty)')}</code>. Type a new password to replace it.
-            </span>
-          </div>
-        </div>
-
-        <div className="form__row form__row--2">
-          <div className="form__row">
-            <label className="form__label" htmlFor="encrypt">Encrypt connection</label>
-            <select
-              id="encrypt"
-              className="form__select"
-              value={form.encrypt ? 'true' : 'false'}
-              disabled={isSqlite}
-              onChange={e => onChange({ encrypt: e.target.value === 'true' })}
-            >
-              <option value="true">Yes (TLS)</option>
-              <option value="false">No</option>
-            </select>
-          </div>
-          <div className="form__row">
-            <label className="form__label" htmlFor="trustServerCertificate">Trust server cert</label>
-            <select
-              id="trustServerCertificate"
-              className="form__select"
-              value={form.trustServerCertificate ? 'true' : 'false'}
-              disabled={isSqlite}
-              onChange={e => onChange({ trustServerCertificate: e.target.value === 'true' })}
-            >
-              <option value="true">Yes</option>
-              <option value="false">No</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="form__actions">
-          <button type="button" className="btn" onClick={onTest}>🔌 Test connection</button>
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={onReset}
-            style={{ color: 'var(--color-danger)' }}
+        {conn && (
+          <dl
+            className="kv-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '180px 1fr',
+              rowGap: 'var(--space-2)',
+              columnGap: 'var(--space-3)',
+              margin: 0
+            }}
           >
-            Reset to seed
-          </button>
-          <button type="submit" className="btn btn--primary" disabled={saved}>
-            {saved ? '✅ Saved' : 'Save settings'}
-          </button>
-        </div>
-      </form>
+            <dt className="text-muted text-sm">Type</dt>
+            <dd style={{ margin: 0 }}><code>{escapeHtml(conn.dbType)}</code></dd>
 
-      <section className="card" style={{ marginTop: 'var(--space-4)' }}>
-        <h2>Current effective settings</h2>
-        <table className="table">
-          <tbody>
-            <tr><th>Type</th><td>{escapeHtml(form.dbType)}</td></tr>
-            <tr><th>Host</th><td>{escapeHtml(form.host) || '—'}</td></tr>
-            <tr><th>Database</th><td>{escapeHtml(form.databaseName) || '—'}</td></tr>
-            <tr><th>Port</th><td>{form.port}</td></tr>
-            <tr><th>Username</th><td>{escapeHtml(form.username) || '—'}</td></tr>
-            <tr><th>Password</th><td><code>{escapeHtml(form.passwordMasked || '(empty)')}</code></td></tr>
-            <tr><th>Encrypt</th><td>{form.encrypt ? 'Yes (TLS)' : 'No'}</td></tr>
-            <tr><th>Trust cert</th><td>{form.trustServerCertificate ? 'Yes' : 'No'}</td></tr>
-          </tbody>
-        </table>
+            <dt className="text-muted text-sm">Host</dt>
+            <dd style={{ margin: 0 }}><code>{escapeHtml(conn.host)}</code></dd>
+
+            <dt className="text-muted text-sm">Port</dt>
+            <dd style={{ margin: 0 }}><code>{conn.port}</code></dd>
+
+            <dt className="text-muted text-sm">Database</dt>
+            <dd style={{ margin: 0 }}><code>{escapeHtml(conn.databaseName)}</code></dd>
+
+            <dt className="text-muted text-sm">Username</dt>
+            <dd style={{ margin: 0 }}><code>{escapeHtml(conn.username)}</code></dd>
+
+            <dt className="text-muted text-sm">Password</dt>
+            <dd style={{ margin: 0 }}>
+              {conn.passwordSet
+                ? <><span className="badge badge--success">● set</span> <span className="text-muted text-sm">(value is never returned by the API)</span></>
+                : <><span className="badge badge--muted">● not set</span> <span className="text-muted text-sm">(default empty)</span></>}
+            </dd>
+
+            <dt className="text-muted text-sm">SSL mode</dt>
+            <dd style={{ margin: 0 }}><code>{escapeHtml(conn.sslMode)}</code></dd>
+
+            <dt className="text-muted text-sm">Reachable</dt>
+            <dd style={{ margin: 0 }}>
+              {conn.isReachable
+                ? <span className="badge badge--success">✓ yes</span>
+                : <><span className="badge badge--danger">✗ no</span> <span className="text-muted text-sm">{escapeHtml(conn.error || '—')}</span></>}
+            </dd>
+
+            <dt className="text-muted text-sm">API server started</dt>
+            <dd style={{ margin: 0 }}>
+              <span className="text-sm">{fmt.dateTime(conn.startedAt)}</span>
+            </dd>
+          </dl>
+        )}
       </section>
 
-      {/* ---------- Card 2: live inspector against the .103 PostgreSQL DB ---------- */}
+      {/* ---------- Card 2: live inspector against the connected PostgreSQL DB ---------- */}
       <DbInspector />
 
     </AppShell>
   );
-}
-
-function maskPassword(p: string): string {
-  if (!p) return '';
-  if (p.length <= 4) return '***';
-  return '*'.repeat(Math.max(4, p.length - 4)) + p.slice(-4);
 }
 
 // ---------- DB inspector card ----------

@@ -9,6 +9,7 @@ import { Leave } from '../lib/leave';
 import { Announcements } from '../lib/announcements';
 import { Settings } from '../lib/settings';
 import { AuditEvents, SystemLogs, apiHealth } from '../lib/audit';
+import { Db, type ConnectionResult } from '../lib/api/db';
 import { USERS, SSO_CONFIG } from '../lib/data';
 
 export function AdminHome() {
@@ -24,11 +25,13 @@ export function AdminHome() {
   const [auditCount, setAuditCount] = useState<number>(0);
   const [logCount, setLogCount] = useState<number>(0);
   const [apiStatus, setApiStatus] = useState<{ ok: boolean; detail: string } | null>(null);
+  const [conn, setConn] = useState<ConnectionResult | null>(null);
 
   useEffect(() => {
     apiHealth().then(setApiStatus);
     Promise.all([AuditEvents.all().catch(() => []), SystemLogs.all().catch(() => [])])
       .then(([a, l]) => { setAuditCount(a.length); setLogCount(l.length); });
+    Db.connection().then(setConn).catch(() => setConn(null));
   }, []);
 
   return (
@@ -84,7 +87,18 @@ export function AdminHome() {
               </td>
             </tr>
             <tr><th>Identity & SSO</th><td>{SSO_CONFIG.mode} ({SSO_CONFIG.directoryMode}) — last test: {SSO_CONFIG.lastTestedAt || 'never'}</td></tr>
-            <tr><th>Database</th><td>{Settings.databaseConfig().dbType} — last test: {Settings.databaseConfig().lastTestedAt ? Settings.databaseConfig().lastTestResult : 'never'}</td></tr>
+            <tr>
+              <th>Database</th>
+              <td>
+                {conn === null
+                  ? <span className="text-muted text-sm">checking…</span>
+                  : conn.isReachable
+                    ? <><span className="badge badge--success">ONLINE</span> Connected to <code>{conn.databaseName}@{conn.host}:{conn.port}</code> <span className="text-muted text-sm">(live)</span> ·{' '}
+                        <Link to="/admin/database">Open database inspector →</Link></>
+                    : <><span className="badge badge--danger">OFFLINE</span> <code>{conn.databaseName}@{conn.host}:{conn.port}</code> — {conn.error || 'unreachable'} ·{' '}
+                        <Link to="/admin/database">Open database inspector →</Link></>}
+              </td>
+            </tr>
             <tr><th>Backup</th><td>{(() => { const b = Settings.backupConfig(); return b.enabled ? `${b.frequency} @ ${b.hourOfDay}:00` : 'Disabled'; })()} — last: {Settings.backupConfig().lastBackupAt || 'never'}</td></tr>
           </tbody>
         </table>

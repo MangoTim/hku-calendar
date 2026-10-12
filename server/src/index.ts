@@ -262,6 +262,39 @@ app.get('/api/db/tables/:table/count', async (req, res) => {
   }
 });
 
+// ----- Active DB connection (live, from env) -----
+// Returns the env-derived config the server is actually using + a SELECT 1
+// reachability probe. Never returns the password — even masked — because the
+// old form's passwordMasked field could be mistaken for the live credential.
+// Returns 200 with isReachable:false on probe failure so the FE can still
+// show "tried to reach X, here's why" instead of a generic error page.
+// PG connect errors include host/port but never the password string (auth
+// errors read "password authentication failed for user X" — no leak).
+const SERVER_STARTED_AT = new Date().toISOString();
+app.get('/api/db/connection', async (_req, res) => {
+  const host = process.env.DB_HOST || '192.168.147.103';
+  const port = Number(process.env.DB_PORT || 5432);
+  const databaseName = process.env.DB_NAME || 'engg_intranet';
+  const username = process.env.DB_USER || 'postgres';
+  let isReachable = false;
+  let error: string | null = null;
+  try {
+    await pool.query('SELECT 1');
+    isReachable = true;
+  } catch (e: any) {
+    error = (e as Error)?.message || 'unknown error';
+  }
+  res.json({
+    dbType: 'POSTGRES',
+    host, port, databaseName, username,
+    sslMode: 'prefer',
+    passwordSet: Boolean(process.env.DB_PASSWORD),
+    isReachable,
+    error,
+    startedAt: SERVER_STARTED_AT
+  });
+});
+
 // ----- Backups -----
 app.get('/api/backups', async (_req, res) => {
   try {

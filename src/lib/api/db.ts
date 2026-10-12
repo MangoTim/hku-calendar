@@ -42,6 +42,19 @@ export interface SampleResult {
   returned: number;
 }
 
+export interface ConnectionResult {
+  dbType: 'POSTGRES';
+  host: string;
+  port: number;
+  databaseName: string;
+  username: string;
+  sslMode: string;
+  passwordSet: boolean;
+  isReachable: boolean;
+  error: string | null;
+  startedAt: string;
+}
+
 export const Db = {
   async overview(): Promise<OverviewResult> {
     return jsonFetch<OverviewResult>('/api/db/overview');
@@ -56,5 +69,11 @@ export const Db = {
   },
   async count(table: string): Promise<{ count: number }> {
     return jsonFetch<{ count: number }>(`/api/db/tables/${encodeURIComponent(table)}/count`);
+  },
+  // Live connection the server is actually using. Source of truth for the
+  // "Active connection" card on /admin/database — never returns the password
+  // itself, only passwordSet: boolean.
+  async connection(): Promise<ConnectionResult> {
+    return jsonFetch<ConnectionResult>('/api/db/connection');
   }
 };
