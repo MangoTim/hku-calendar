@@ -28,6 +28,7 @@ import { AdminUsers } from './pages/AdminUsers';
 import { AdminTaskSettings } from './pages/AdminTaskSettings';
 import { AdminHolidays } from './pages/AdminHolidays';
 import { AdminDatabase } from './pages/AdminDatabase';
+import { AdminSso } from './pages/AdminSso';
 import { AdminBackup } from './pages/AdminBackup';
 import { AdminAudit } from './pages/AdminAudit';
 import { AdminSystemLogs } from './pages/AdminSystemLogs';
@@ -176,7 +177,7 @@ export default function App() {
           } />
           <Route path="/admin/sso" element={
             <RequireRole allow={() => ROLE.isAdmin()}>
-              <Placeholder title="Identity & SSO" body="SSO admin is awaiting network team input before implementation." />
+              <AdminSso />
             </RequireRole>
           } />
           <Route path="/admin/database" element={

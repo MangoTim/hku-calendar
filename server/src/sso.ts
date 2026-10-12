@@ -1,6 +1,6 @@
 // HKU SSO via Microsoft Entra ID (Azure AD). Phase 7b — full round-trip:
-//   - GET /api/sso/login     → if all env vars are set, 302-redirects to the
-//                              Azure AD /authorize endpoint (Auth Code +
+//   - GET /api/sso/login     → if all config is available, 302-redirects to
+//                              the Azure AD /authorize endpoint (Auth Code +
 //                              client_secret flow). Otherwise returns a
 //                              friendly 503 HTML page so the front-end
 //                              button doesn't 404.
@@ -11,28 +11,52 @@
 //                              session cookie so a follow-up
 //                              GET /api/auth/session can return the user.
 //
-// To go fully live: set AZURE_TENANT_ID, AZURE_CLIENT_ID,
-// AZURE_CLIENT_SECRET, and SSO_REDIRECT_URI in server/.env (or as -e flags
-// to podman run). The redirect URI must be registered in the Azure AD app
-// and admin consent granted by the HKU IT team.
+// Config source-of-truth: the singleton row in `sso_config` (managed by
+// /admin/sso). The env vars AZURE_TENANT_ID / AZURE_CLIENT_ID /
+// AZURE_CLIENT_SECRET bootstrap the row on first boot and are used as a
+// fallback if the DB row is empty (cold deploy). After admins save via the
+// UI, env vars are ignored.
+//
+// SSO_REDIRECT_URI stays env-only — it's the public-facing URL where the
+// container is reachable, registered in Azure AD. Admins should never edit
+// this through the UI.
 
 import type { Express, Request } from 'express';
 import * as jose from 'jose';
+import { getSsoConfig, type SsoDbConfig } from './ssoConfig.ts';
 
-const TENANT        = process.env.AZURE_TENANT_ID;
-const CLIENT_ID     = process.env.AZURE_CLIENT_ID;
-const CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET;
 const REDIRECT_URI  = process.env.SSO_REDIRECT_URI;
 const POST_LOGIN    = process.env.SSO_POST_LOGIN_REDIRECT || '/dashboard';
 const COOKIE_SECRET = process.env.SSO_COOKIE_SECRET || 'dev-only-not-secure-change-me';
 
-// Sanity guard: if any of the four core vars is missing, the login route
-// degrades to the 503 page so the button never 404s.
-const SSO_CONFIGURED = Boolean(TENANT && CLIENT_ID && CLIENT_SECRET && REDIRECT_URI);
+/** Lazy-cached effective SSO config. Cleared on /api/sso/config PUT so
+ *  admin edits take effect without restarting the API. */
+let _effective: SsoDbConfig | null = null;
+async function effective(): Promise<SsoDbConfig> {
+  if (_effective) return _effective;
+  const db = await getSsoConfig();
+  // Env fallback only if the DB row has nothing useful. The DB-seeded
+  // row (in db.ts:seedIfEmpty) already prefers env values, so this
+  // fallback only fires when the row is genuinely empty.
+  if (!db.tenantId)    db.tenantId    = process.env.AZURE_TENANT_ID || '';
+  if (!db.clientId)    db.clientId    = process.env.AZURE_CLIENT_ID || '';
+  if (!db.clientSecret) db.clientSecret = process.env.AZURE_CLIENT_SECRET || '';
+  if (db.tenantId && !db.authorityUrl) {
+    db.authorityUrl = `https://login.microsoftonline.com/${db.tenantId}`;
+  }
+  _effective = db;
+  return _effective;
+}
+
+/** Called by saveSsoConfig() after a successful admin PUT. Forces the next
+ *  /api/sso/* request to re-read from DB. Safe to call from any context. */
+export function invalidateEffectiveSso(): void { _effective = null; }
 
 export function initSso(app: Express): void {
-  app.get('/api/sso/login', (req, res) => {
-    if (!SSO_CONFIGURED) {
+  app.get('/api/sso/login', async (req, res) => {
+    const cfg = await effective();
+    const configured = Boolean(cfg.tenantId && cfg.clientId && cfg.clientSecret && REDIRECT_URI);
+    if (!configured) {
       res.status(503).send(pendingHtml());
       return;
     }
@@ -44,8 +68,8 @@ export function initSso(app: Express): void {
       secure: true,
       maxAge: 5 * 60 * 1000
     });
-    const url = new URL(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`);
-    url.searchParams.set('client_id', CLIENT_ID!);
+    const url = new URL(`https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/authorize`);
+    url.searchParams.set('client_id', cfg.clientId);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('redirect_uri', REDIRECT_URI!);
     url.searchParams.set('response_mode', 'query');
@@ -55,7 +79,9 @@ export function initSso(app: Express): void {
   });
 
   app.get('/api/sso/callback', async (req, res) => {
-    if (!SSO_CONFIGURED) {
+    const cfg = await effective();
+    const configured = Boolean(cfg.tenantId && cfg.clientId && cfg.clientSecret && REDIRECT_URI);
+    if (!configured) {
       res.status(503).send('SSO not configured — see /api/sso/login for setup instructions.');
       return;
     }
@@ -89,13 +115,13 @@ export function initSso(app: Express): void {
     let tokens: { id_token: string; access_token?: string; expires_in?: number };
     try {
       const r = await fetch(
-        `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`,
+        `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
-            client_id: CLIENT_ID!,
-            client_secret: CLIENT_SECRET!,
+            client_id: cfg.clientId,
+            client_secret: cfg.clientSecret,
             code,
             redirect_uri: REDIRECT_URI!,
             grant_type: 'authorization_code',
@@ -117,13 +143,13 @@ export function initSso(app: Express): void {
     // 4. Verify the id_token signature + standard claims.
     // JWKS is cached by jose and refreshed on key rotation.
     const JWKS = jose.createRemoteJWKSet(
-      new URL(`https://login.microsoftonline.com/${TENANT}/discovery/v2.0/keys`)
+      new URL(`https://login.microsoftonline.com/${cfg.tenantId}/discovery/v2.0/keys`)
     );
     let payload: jose.JWTPayload & { oid: string; name?: string; email?: string; preferred_username?: string };
     try {
       const verified = await jose.jwtVerify(tokens.id_token, JWKS, {
-        issuer: `https://login.microsoftonline.com/${TENANT}/v2.0`,
-        audience: CLIENT_ID!
+        issuer: `https://login.microsoftonline.com/${cfg.tenantId}/v2.0`,
+        audience: cfg.clientId
       });
       payload = verified.payload as typeof payload;
     } catch (e: any) {
@@ -162,7 +188,7 @@ export function initSso(app: Express): void {
       name,
       email,
       oid,
-      tenant: TENANT!,
+      tenant: cfg.tenantId,
       expires: new Date((payload.exp as number) * 1000).toISOString(),
       postLoginUrl: POST_LOGIN
     }));

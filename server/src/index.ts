@@ -28,6 +28,7 @@ import {
   isAllowedTable
 } from './introspect.ts';
 import { initSso } from './sso.ts';
+import { getSsoConfig, saveSsoConfig, testSsoConnection } from './ssoConfig.ts';
 import type { HolidayFormat } from '../../src/lib/types.ts';
 
 const PORT = Number(process.env.PORT || 8092);
@@ -46,6 +47,67 @@ app.use(express.json({ limit: '2mb' }));
 
 // ----- SSO (Phase 7b stub — see server/src/sso.ts) -----
 initSso(app);
+
+// ----- SSO admin: config GET/PUT + test -----
+// /admin/sso is the UI; these are the endpoints it talks to. The secret is
+// stored plaintext server-side (rotatable via Azure Portal → Certificates
+// & secrets) and masked before being sent to the FE — the FE never holds
+// the plaintext secret.
+app.get('/api/sso/config', async (_req, res) => {
+  try {
+    const c = await getSsoConfig();
+    const masked = c.clientSecret
+      ? '*'.repeat(Math.max(0, c.clientSecret.length - 4)) + c.clientSecret.slice(-4)
+      : '';
+    res.json({
+      mode: c.mode,
+      directoryMode: c.directoryMode,
+      tenantId: c.tenantId,
+      authorityUrl: c.authorityUrl,
+      clientId: c.clientId,
+      clientSecretMasked: masked,
+      lastTestedAt: c.lastTestedAt,
+      lastTestResult: c.lastTestResult,
+      lastTestSteps: c.lastTestSteps
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.put('/api/sso/config', async (req, res) => {
+  const b = req.body ?? {};
+  const { mode, directoryMode, tenantId, authorityUrl, clientId, clientSecret } = b;
+  if (!['LOCAL', 'MIXED', 'SSO'].includes(mode))          return res.status(400).json({ error: 'invalid mode (must be LOCAL | MIXED | SSO)' });
+  if (!['DEMO', 'GRAPH'].includes(directoryMode))        return res.status(400).json({ error: 'invalid directoryMode (must be DEMO | GRAPH)' });
+  if (typeof tenantId !== 'string' || !tenantId.trim())  return res.status(400).json({ error: 'tenantId is required' });
+  if (typeof authorityUrl !== 'string' || !authorityUrl.trim()) return res.status(400).json({ error: 'authorityUrl is required' });
+  if (typeof clientId !== 'string' || !clientId.trim())  return res.status(400).json({ error: 'clientId is required' });
+  try {
+    await saveSsoConfig(
+      {
+        mode, directoryMode,
+        tenantId: tenantId.trim(),
+        authorityUrl: authorityUrl.trim(),
+        clientId: clientId.trim(),
+        clientSecret: typeof clientSecret === 'string' ? clientSecret : undefined
+      },
+      null
+    );
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post('/api/sso/test', async (_req, res) => {
+  try {
+    const r = await testSsoConnection();
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message, ok: false, steps: [] });
+  }
+});
 
 // ----- Health -----
 app.get('/health', (_req, res) => res.json({ status: 'ok', db: 'ok' }));

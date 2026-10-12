@@ -98,6 +98,25 @@ async function ensureSchema(): Promise<void> {
       imported_by INTEGER,
       count INTEGER NOT NULL DEFAULT 0
     );
+
+    -- Singleton row (id=1) for the Microsoft Entra / SSO integration
+    -- managed by /admin/sso. Seeded from env on first boot; admins edit
+    -- through the UI after that. client_secret is stored plaintext
+    -- server-side (masked on read) — rotatable via Azure Portal.
+    CREATE TABLE IF NOT EXISTS sso_config (
+      id                INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      mode              TEXT NOT NULL CHECK (mode IN ('LOCAL','MIXED','SSO')),
+      directory_mode    TEXT NOT NULL CHECK (directory_mode IN ('DEMO','GRAPH')),
+      tenant_id         TEXT NOT NULL,
+      authority_url     TEXT NOT NULL,
+      client_id         TEXT NOT NULL,
+      client_secret     TEXT NOT NULL,
+      last_tested_at    TIMESTAMPTZ,
+      last_test_result  TEXT,
+      last_test_steps   JSONB,
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by        INTEGER
+    );
   `);
   console.log('[db] schema ensured');
 }
@@ -127,6 +146,22 @@ async function seedIfEmpty(): Promise<void> {
       );
     }
     await pool!.query(`SELECT setval('system_logs_id_seq', (SELECT MAX(id) FROM system_logs))`);
+  }
+
+  // SSO singleton — seed from env on first boot so the existing .105 deploy
+  // works without a manual admin action. After this, admins edit via /admin/sso.
+  const ssoCount = await pool!.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM sso_config');
+  if (Number(ssoCount.rows[0].count) === 0) {
+    const tenant = process.env.AZURE_TENANT_ID || '';
+    const client = process.env.AZURE_CLIENT_ID || '';
+    const secret = process.env.AZURE_CLIENT_SECRET || '';
+    const authority = tenant ? `https://login.microsoftonline.com/${tenant}` : '';
+    await pool!.query(
+      `INSERT INTO sso_config (id, mode, directory_mode, tenant_id, authority_url, client_id, client_secret)
+       VALUES (1, 'MIXED', 'GRAPH', $1, $2, $3, $4)`,
+      [tenant, authority, client, secret]
+    );
+    console.log(`[db] seeded sso_config row from env (tenant=${tenant ? 'set' : 'empty'})`);
   }
 }
 
