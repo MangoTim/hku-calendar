@@ -354,6 +354,35 @@ function successHtml(u: {
     a.btn:hover { background: #00c896; }
     .footer { margin-top: 24px; font-size: 13px; color: #94a3b8; border-top: 1px solid #334155; padding-top: 16px; }
   </style>
+  <script>
+    // Auto-bridge to /sso-finish with the verified identity carried as URL
+    // query params. This avoids depending on the sso_session cookie being
+    // preserved across the navigation (some browsers/configs drop it on
+    // same-origin GETs that follow a server-rendered HTML response).
+    //
+    // The script runs ASYNCHRONOUSLY (deferred) so the success card
+    // renders first — useful when the network is slow, and lets a manual
+    // "Continue" click still work as a fallback.
+    //
+    // JSON.stringify() here keeps Microsoft's JWT payload values safe to
+    // concatenate into JS source — escapeHtml already kept them safe in
+    // the HTML above. The /sso-finish React route uses the params
+    // diagnostically only; it re-validates the cookie via /api/auth/session
+    // before doing anything privileged.
+    window.addEventListener('DOMContentLoaded', function () {
+      fetch('/api/auth/session').then(function (r) { return r.json(); }).then(function (data) {
+        var user = data && data.user;
+        if (!user || user.source !== 'sso') return;
+        var params = new URLSearchParams({
+          oid: user.oid || '',
+          name: user.name || '',
+          email: user.email || '',
+          return: ${JSON.stringify(u.postLoginUrl)}
+        });
+        location.replace('/sso-finish?' + params.toString());
+      }).catch(function () { /* stay on the success card; user can hit Continue */ });
+    });
+  </script>
 </head>
 <body>
   <div class="card">
@@ -366,10 +395,10 @@ function successHtml(u: {
       <dt>Tenant</dt><dd><code>${escapeHtml(u.tenant)}</code></dd>
       <dt>ID token expires</dt><dd><code>${escapeHtml(u.expires)}</code></dd>
     </dl>
-    <a class="btn" href="${escapeHtml(u.postLoginUrl)}">→ Continue to ${escapeHtml(u.postLoginUrl)}</a>
+    <a class="btn" id="sso-continue" href="${escapeHtml(u.postLoginUrl)}">→ Continue to ${escapeHtml(u.postLoginUrl)}</a>
     <div class="footer">
       Round-trip complete: <code>/api/sso/login</code> → Azure AD → <code>/api/sso/callback</code> (code exchanged, ID token verified, session cookie set).<br />
-      Full FE integration (auto sign-in on the React side) is a separate piece of work — for now, the demo user picker still works after this redirect.
+      Auto-redirecting you to the dashboard in a moment. If nothing happens, click <strong>Continue</strong>.
     </div>
   </div>
 </body>

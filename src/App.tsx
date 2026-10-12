@@ -29,6 +29,7 @@ import { AdminTaskSettings } from './pages/AdminTaskSettings';
 import { AdminHolidays } from './pages/AdminHolidays';
 import { AdminDatabase } from './pages/AdminDatabase';
 import { AdminSso } from './pages/AdminSso';
+import { SsoFinish } from './pages/SsoFinish';
 import { AdminBackup } from './pages/AdminBackup';
 import { AdminAudit } from './pages/AdminAudit';
 import { AdminSystemLogs } from './pages/AdminSystemLogs';
@@ -74,6 +75,14 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/login" element={<Login />} />
+
+          {/* /sso-finish — SSO landing handler. Server-rendered successHtml
+              JS-redirects here with oid/name/email as query params so the
+              React app can bridge to a localStorage session without relying
+              on the sso_session cookie being preserved across navigations.
+              Not RequireAuth-protected — it's the bridge *into* an authed
+              state. Must be defined before the * catch-all. */}
+          <Route path="/sso-finish" element={<SsoFinish />} />
 
           <Route path="/dashboard" element={
             <RequireAuth><Dashboard /></RequireAuth>
