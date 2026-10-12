@@ -1,6 +1,6 @@
 // AuthContext — wraps the static Session helpers in a React context
 // so any component can read the current user, sign in, or sign out.
-import { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Session, ROLE } from '../lib/app';
 import type { Session as SessionType, User, Role } from '../lib/types';
@@ -75,6 +75,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
+
+  /** Mint / clear the `local_admin` cookie that mirrors a LOCAL/DEMO admin
+   *  session onto the API server, so /api/sso/users (admin CRUD) works
+   *  without an SSO cookie. SSO-signed-in users already have sso_session,
+   *  so the SSO path in requireAdmin handles them — we only need to mint
+   *  this for /login picker sign-ins. */
+  const lastCookieUserIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    const mintOrClear = async () => {
+      if (!session) {
+        // Sign-out: best-effort clear.
+        if (lastCookieUserIdRef.current !== null) {
+          lastCookieUserIdRef.current = null;
+          fetch('/api/sso/local-admin-logout', { method: 'POST' }).catch(() => { /* no-op */ });
+        }
+        return;
+      }
+      const localUser = USERS.find(u => u.id === session.userId);
+      const wantAdminCookie =
+        localUser &&
+        (localUser.source === 'LOCAL' || localUser.source === 'DEMO') &&
+        localUser.role === 'ADMIN' &&
+        localUser.enabled !== false;
+      if (!wantAdminCookie) {
+        if (lastCookieUserIdRef.current !== null) {
+          lastCookieUserIdRef.current = null;
+          fetch('/api/sso/local-admin-logout', { method: 'POST' }).catch(() => { /* no-op */ });
+        }
+        return;
+      }
+      // Skip the round-trip if the cookie is already on this user.
+      if (lastCookieUserIdRef.current === localUser.id) return;
+      lastCookieUserIdRef.current = localUser.id;
+      try {
+        await fetch('/api/sso/local-admin-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: localUser.id,
+            role: localUser.role,
+            source: localUser.source,
+            enabled: localUser.enabled !== false
+          })
+        });
+      } catch { /* network down — admin gate will 401 next request */ }
+    };
+    mintOrClear();
+  }, [session]);
 
   const signIn = useCallback((userId: number) => {
     const user = USERS.find(u => u.id === Number(userId));

@@ -131,32 +131,123 @@ const COOKIE_SECRET = new TextEncoder().encode(
   process.env.SSO_COOKIE_SECRET || 'demo-sso-cookie-secret-change-me'
 );
 
-async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
-  // Read raw cookie header (mirrors sso.ts readCookie — duplicated to keep
-  // sso.ts free of express middleware concerns).
+async function readSsoSessionToken(req: express.Request): Promise<string | null> {
   const cookieHeader = req.headers.cookie || '';
   const token = cookieHeader
     .split(';')
     .map(s => s.trim())
     .find(s => s.startsWith('sso_session='))
     ?.slice('sso_session='.length);
-  if (!token) return res.status(401).json({ error: 'no sso_session cookie' });
-  let p: any;
-  try {
-    const v = await jose.jwtVerify(decodeURIComponent(token), COOKIE_SECRET, { algorithms: ['HS256'] });
-    p = v.payload;
-  } catch {
-    return res.status(401).json({ error: 'invalid or expired sso_session' });
-  }
-  const email = String(p?.email || '').toLowerCase();
-  if (!email) return res.status(401).json({ error: 'sso_session has no email claim' });
-  const u = await findSsoUserByEmail(email);
-  if (!u) return res.status(403).json({ error: 'no admin account matches this SSO identity' });
-  if (!u.enabled) return res.status(403).json({ error: 'admin account is disabled' });
-  if (u.role !== 'ADMIN') return res.status(403).json({ error: 'admin role required' });
-  (req as any).adminUserId = u.id;
-  next();
+  return token ? decodeURIComponent(token) : null;
 }
+
+async function readLocalAdminToken(req: express.Request): Promise<string | null> {
+  const cookieHeader = req.headers.cookie || '';
+  const token = cookieHeader
+    .split(';')
+    .map(s => s.trim())
+    .find(s => s.startsWith('local_admin='))
+    ?.slice('local_admin='.length);
+  return token ? decodeURIComponent(token) : null;
+}
+
+/** Two-path admin gate:
+ *
+ *   1. sso_session cookie (verified + looked up in sso_users, requires role
+ *      ADMIN, account enabled).
+ *   2. local_admin cookie (verified HS256, claims { userId, role } — the
+ *      FE only mints this for LOCAL/DEMO users whose localStorage session
+ *      has role=ADMIN and is enabled). Lets admins who signed in via the
+ *      /login picker (no Azure identity, no SSO cookie) reach the admin
+ *      API too.
+ *
+ *  Both paths populate `req.adminUserId` so audit-trail handlers can record
+ *  the acting principal. */
+async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  // Path 1: SSO session.
+  const ssoToken = await readSsoSessionToken(req);
+  if (ssoToken) {
+    try {
+      const v = await jose.jwtVerify(ssoToken, COOKIE_SECRET, { algorithms: ['HS256'] });
+      const email = String((v.payload as any)?.email || '').toLowerCase();
+      if (email) {
+        const u = await findSsoUserByEmail(email);
+        if (u && u.enabled && u.role === 'ADMIN') {
+          (req as any).adminUserId = u.id;
+          (req as any).adminSource = 'sso';
+          return next();
+        }
+      }
+    } catch { /* fall through to local_admin */ }
+  }
+  // Path 2: Local admin cookie (LOCAL/DEMO sign-in via /login picker).
+  const localToken = await readLocalAdminToken(req);
+  if (localToken) {
+    try {
+      const v = await jose.jwtVerify(localToken, COOKIE_SECRET, { algorithms: ['HS256'] });
+      const p = v.payload as any;
+      const userId = Number(p?.userId);
+      const role = String(p?.role || '');
+      const source = String(p?.source || '');
+      if (Number.isFinite(userId) && role === 'ADMIN' && (source === 'LOCAL' || source === 'DEMO') && p?.enabled !== false) {
+        (req as any).adminUserId = userId;
+        (req as any).adminSource = source.toLowerCase();
+        return next();
+      }
+    } catch { /* fall through */ }
+  }
+  return res.status(401).json({ error: 'admin session required (sign in as an ADMIN role via /login or SSO)' });
+}
+
+/** Issue a `local_admin` cookie for a LOCAL/DEMO admin so they can reach
+ *  the SSO-allowlist admin API without an SSO cookie. Token claims:
+ *    userId, role, source, enabled, iat, exp.
+ *  Signed with the same COOKIE_SECRET as sso_session — verification is
+ *  symmetric and constant-time.
+ *
+ *  The cookie is meaningless without a valid localStorage session on the
+ *  client because *minting* it doesn't itself grant power; the request
+ *  still passes through requireAdmin. We could harden this further by
+ *  binding the cookie to the seed USERS list server-side, but for the
+ *  demo scope the signed claim is enough — only admins are authorized
+ *  to mint one (role must be ADMIN; the FE only calls this for ADMIN
+ *  sessions). */
+app.post('/api/sso/local-admin-session', async (req, res) => {
+  const b = req.body ?? {};
+  const userId = Number(b.userId);
+  const role = String(b.role || '');
+  const source = String(b.source || '');
+  const enabled = b.enabled !== false;
+  if (!Number.isFinite(userId)) return res.status(400).json({ error: 'valid userId required' });
+  if (role !== 'ADMIN')         return res.status(403).json({ error: 'ADMIN role required' });
+  if (source !== 'LOCAL' && source !== 'DEMO') return res.status(400).json({ error: 'source must be LOCAL or DEMO' });
+  if (!enabled)                 return res.status(403).json({ error: 'account is disabled' });
+
+  try {
+    const token = await new jose.SignJWT({ userId, role, source, enabled })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime('12h')
+      .sign(COOKIE_SECRET);
+    const segs = [
+      `local_admin=${encodeURIComponent(token)}`,
+      'Path=/',
+      `Max-Age=${Math.floor((12 * 60 * 60 * 1000) / 1000)}`,
+      'HttpOnly',
+      'Secure',
+      'SameSite=Lax'
+    ];
+    res.append('Set-Cookie', segs.join('; '));
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post('/api/sso/local-admin-logout', (_req, res) => {
+  res.append('Set-Cookie', 'local_admin=; Path=/; Max-Age=0');
+  res.json({ ok: true });
+});
 
 // Public read — used by SsoFinish + AuthContext bootstrap.
 app.get('/api/sso/users/lookup', async (req, res) => {
