@@ -643,6 +643,49 @@ option:hover, option:focus, option:checked, option:active {
 .login-submit:active { transform: translateY(1px); }
 .login-submit[disabled] { opacity: 0.5; cursor: not-allowed; }
 
+/* HKU SSO button — Microsoft-style (white surface, dark text, brand icon).
+   Distinct from .login-submit so the two CTAs don't blend. */
+.login-sso-btn {
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #1f2937;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+.login-sso-btn:hover { background: #f8fafc; border-color: #94a3b8; }
+.login-sso-btn:active { transform: translateY(1px); }
+.login-sso-btn:focus-visible { outline: 2px solid #38bdf8; outline-offset: 2px; }
+.login-sso-icon { display: inline-flex; align-items: center; }
+
+/* "or sign in as a demo user" — hairline rule with a centered label */
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: #334155;
+}
+
 .login-tip {
   color: #9ca3af;
   font-size: 12px;

@@ -114,6 +114,30 @@ export function Login() {
             <h2 id="loginTitle">Sign in</h2>
             <p className="login-sub">Welcome back — sign in with HKU Single Sign-On to continue.</p>
 
+            {/* Real HKU SSO via Microsoft Entra ID. Wires to /api/sso/login
+                which redirects to Azure AD. Until Eric registers the
+                redirect URI + grants admin consent, the backend returns a
+                friendly 503 page (see server/src/sso.ts). */}
+            <button
+              type="button"
+              className="login-sso-btn"
+              onClick={() => { window.location.href = '/api/sso/login'; }}
+            >
+              <span className="login-sso-icon" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="1" y="1" width="9" height="9" fill="#f25022" />
+                  <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
+                  <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
+                  <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
+                </svg>
+              </span>
+              Sign in with HKU SSO
+            </button>
+
+            <div className="login-divider" role="separator" aria-label="or sign in as demo user">
+              <span>or sign in as a demo user</span>
+            </div>
+
             <input
               id="userSearch"
               className="login-search"
@@ -171,7 +195,7 @@ export function Login() {
               disabled={!pickedId}
               onClick={onSubmit}
             >
-              {picked ? `Sign in as ${picked.displayName.split(' ').slice(-1)[0]}` : 'Sign in with HKU SSO'}
+              {picked ? `Sign in as ${picked.displayName.split(' ').slice(-1)[0]}` : 'Sign in (select a demo user)'}
             </button>
 
             <p className="login-tip">

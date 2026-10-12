@@ -27,6 +27,7 @@ import {
   refreshAllowList,
   isAllowedTable
 } from './introspect.ts';
+import { initSso } from './sso.ts';
 import type { HolidayFormat } from '../../src/lib/types.ts';
 
 const PORT = Number(process.env.PORT || 8092);
@@ -42,6 +43,9 @@ const pool = getPool();
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+// ----- SSO (Phase 7b stub — see server/src/sso.ts) -----
+initSso(app);
 
 // ----- Health -----
 app.get('/health', (_req, res) => res.json({ status: 'ok', db: 'ok' }));
