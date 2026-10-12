@@ -13,7 +13,7 @@
 // only via the local /login picker.
 import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../components/AppShell';
-import { UserAdmin } from '../lib/userAdmin';
+import { UserAdmin, isSeedUser } from '../lib/userAdmin';
 import { SsoUsers, type SsoUserView } from '../lib/api/ssoUsers';
 import { fmt, escapeHtml } from '../lib/app';
 import type { User as AppUserT, Role as AppRoleT } from '../lib/types';
@@ -32,6 +32,7 @@ export function AdminUsers() {
   const [ssoLoading, setSsoLoading] = useState(true);
   const [ssoError, setSsoError] = useState<string | null>(null);
   const [addingSso, setAddingSso] = useState(false);
+  const [addingLocal, setAddingLocal] = useState(false);
 
   const reloadSso = async () => {
     setSsoLoading(true);
@@ -74,7 +75,6 @@ export function AdminUsers() {
   }, [all, search, role, team, source]);
 
   const counts = useMemo(() => {
-    const seed = UserAdmin.all();
     const enabledCount = all.filter(u => u.enabled).length;
     return {
       total: all.length,
@@ -83,7 +83,8 @@ export function AdminUsers() {
       admins: all.filter(u => u.role === 'ADMIN').length,
       taskManagers: all.filter(u => u.role === 'TASK_MANAGER').length,
       auditors: all.filter(u => u.role === 'AUDITOR').length,
-      seed: seed.length,
+      seed: UserAdmin.counts().seed,
+      created: UserAdmin.counts().created,
       sso: ssoUsers.length
     };
   }, [all, ssoUsers]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -103,10 +104,13 @@ export function AdminUsers() {
           <div className="page-header__sub">
             {counts.total} total · {counts.enabled} enabled · {counts.admins} admins · {counts.taskManagers} task managers · {counts.auditors} auditors
             {' · '}
-            <span className="text-muted">{counts.seed} seed + {counts.sso} SSO</span>
+            <span className="text-muted">{counts.seed} seed + {counts.created} created + {counts.sso} SSO</span>
           </div>
         </div>
-        <button className="btn" onClick={() => setAddingSso(true)}>+ Add SSO user</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn" onClick={() => setAddingLocal(true)}>+ Add user</button>
+          <button className="btn" onClick={() => setAddingSso(true)}>+ Add SSO user</button>
+        </div>
       </div>
 
       {ssoError && (
@@ -180,6 +184,13 @@ export function AdminUsers() {
         />
       )}
 
+      {addingLocal && (
+        <AddLocalUserModal
+          onClose={() => setAddingLocal(false)}
+          onSaved={() => { setAddingLocal(false); onChange(); }}
+        />
+      )}
+
       {ssoLoading && ssoUsers.length === 0 && (
         <div className="text-muted text-sm" style={{ marginTop: 8 }}>Loading SSO allowlist…</div>
       )}
@@ -197,12 +208,21 @@ function Row({
   onSsoChanged: () => Promise<void>;
 }) {
   const isSso = u.source === 'SSO';
+  const isSeed = isSeedUser(u.id);
+  const isLsCreated = !isSso && !isSeed;
   const [editing, setEditing] = useState(false);
+  const [registeringSso, setRegisteringSso] = useState(false);
 
   const onToggleEnabled = async () => {
     if (isSso) {
       await SsoUsers.update(u.id, { enabled: !u.enabled });
       await onSsoChanged();
+    } else if (isLsCreated) {
+      // Persistence for LS-created users happens inside setEnabled: we
+      // mutate the stored record via a delete-then-recreate, which is fine
+      // because the only mutable field on LS-created rows is `enabled`.
+      const toggled = UserAdmin.toggleCreatedEnabled(u.id, !u.enabled);
+      if (toggled) onChange();
     } else {
       UserAdmin.setEnabled(u.id, !u.enabled);
       onChange();
@@ -214,6 +234,9 @@ function Row({
     if (isSso) {
       await SsoUsers.update(u.id, { role: next });
       await onSsoChanged();
+    } else if (isLsCreated) {
+      const updated = UserAdmin.setCreatedRole(u.id, next);
+      if (updated) onChange();
     } else {
       UserAdmin.setRole(u.id, next);
       onChange();
@@ -221,9 +244,15 @@ function Row({
   };
 
   const onDelete = async () => {
-    if (!confirm(`Delete SSO user "${u.displayName}" (${u.email})? This cannot be undone.`)) return;
-    await SsoUsers.remove(u.id);
-    await onSsoChanged();
+    if (isSso) {
+      if (!confirm(`Delete SSO user "${u.displayName}" (${u.email})? This cannot be undone.`)) return;
+      await SsoUsers.remove(u.id);
+      await onSsoChanged();
+    } else if (isLsCreated) {
+      if (!confirm(`Delete local user "${u.displayName}"? This cannot be undone.`)) return;
+      UserAdmin.deleteLocalUser(u.id);
+      onChange();
+    }
   };
 
   const roleColor: Record<AppRoleT, string> = {
@@ -273,12 +302,24 @@ function Row({
           <button className="btn btn--ghost btn--sm" onClick={onToggleEnabled}>
             {u.enabled ? 'Disable' : 'Enable'}
           </button>
-          {isSso && (
+          {isSso ? (
             <>
               {' '}
               <button className="btn btn--ghost btn--sm" onClick={() => setEditing(true)}>Edit</button>
               {' '}
               <button className="btn btn--ghost btn--sm" style={{ color: 'var(--color-danger)' }} onClick={onDelete}>Delete</button>
+            </>
+          ) : isLsCreated ? (
+            <>
+              {' '}
+              <button className="btn btn--ghost btn--sm" onClick={() => setRegisteringSso(true)}>+ Allow SSO</button>
+              {' '}
+              <button className="btn btn--ghost btn--sm" style={{ color: 'var(--color-danger)' }} onClick={onDelete}>Delete</button>
+            </>
+          ) : (
+            <>
+              {' '}
+              <button className="btn btn--ghost btn--sm" onClick={() => setRegisteringSso(true)}>+ Allow SSO</button>
             </>
           )}
         </td>
@@ -290,7 +331,134 @@ function Row({
           onSaved={async () => { setEditing(false); await onSsoChanged(); }}
         />
       )}
+      {registeringSso && !isSso && (
+        <RegisterLocalForSsoModal
+          u={u}
+          onClose={() => setRegisteringSso(false)}
+          onSaved={async () => { setRegisteringSso(false); await onSsoChanged(); }}
+        />
+      )}
     </>
+  );
+}
+
+/** Add a brand-new LOCAL user — persisted to LS only (no DB). The
+ *  admin can later click "+ Allow SSO" on this row to register them in
+ *  the SSO allowlist with their email. */
+function AddLocalUserModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<AppRoleT>('USER');
+  const [team, setTeam] = useState('');
+  const [title, setTitle] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+
+  const emailValid = !email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const valid = displayName.trim().length > 0 && emailValid;
+
+  const onSubmit = () => {
+    if (!valid) return;
+    setErr(null);
+    try {
+      UserAdmin.createLocalUser({
+        displayName: displayName.trim(),
+        username: username.trim() || undefined,
+        email: email.trim() || undefined,
+        role,
+        team: team.trim() || 'Unassigned',
+        title: title.trim()
+      });
+      onSaved();
+    } catch (e: any) {
+      setErr((e as Error)?.message || 'Failed to create');
+    }
+  };
+
+  return (
+    <ModalShell title="Add user" onClose={onClose}>
+      <p className="text-muted text-sm" style={{ marginBottom: 12 }}>
+        Creates a new LOCAL user, persisted to this browser. They will appear
+        in the <code>/login</code> picker and can be promoted to SSO via
+        <code> + Allow SSO</code> later.
+      </p>
+      <div className="form__row">
+        <label className="form__label" htmlFor="localDisplayName">Display name <span style={{ color: 'var(--color-danger)' }}>*</span></label>
+        <input
+          id="localDisplayName"
+          className="form__input"
+          value={displayName}
+          onChange={e => setDisplayName(e.target.value)}
+          autoFocus
+        />
+      </div>
+      <div className="form__row">
+        <label className="form__label" htmlFor="localUsername">Username</label>
+        <input
+          id="localUsername"
+          className="form__input"
+          placeholder="(auto — derived from display name)"
+          value={username}
+          onChange={e => setUsername(e.target.value)}
+          autoComplete="off"
+        />
+        <span className="form__hint text-muted">Used for sign-in on <code>/login</code>. Leave blank to derive from display name.</span>
+      </div>
+      <div className="form__row">
+        <label className="form__label" htmlFor="localEmail">Email</label>
+        <input
+          id="localEmail"
+          className="form__input"
+          type="email"
+          placeholder="name@rainbowtech.com.hk"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          autoComplete="off"
+        />
+        <span className="form__hint text-muted">Optional. If set, you'll be able to register this user for SSO.</span>
+        {!emailValid && <div className="text-sm" style={{ color: 'var(--color-danger)' }}>Looks like an invalid email.</div>}
+      </div>
+      <div className="form__row">
+        <label className="form__label" htmlFor="localRole">Role</label>
+        <select
+          id="localRole"
+          className="form__select"
+          value={role}
+          onChange={e => setRole(e.target.value as AppRoleT)}
+        >
+          <option value="USER">User</option>
+          <option value="TASK_MANAGER">Task Manager</option>
+          <option value="ADMIN">Administrator</option>
+          <option value="AUDITOR">Auditor</option>
+        </select>
+      </div>
+      <div className="form__row">
+        <label className="form__label" htmlFor="localTeam">Team</label>
+        <input
+          id="localTeam"
+          className="form__input"
+          placeholder="e.g. IT Admin, Accounts, Facilities"
+          value={team}
+          onChange={e => setTeam(e.target.value)}
+        />
+        <span className="form__hint text-muted">Defaults to "Unassigned" if blank.</span>
+      </div>
+      <div className="form__row">
+        <label className="form__label" htmlFor="localTitle">Title</label>
+        <input
+          id="localTitle"
+          className="form__input"
+          placeholder="e.g. IT Team Lead, Clerk"
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+        />
+      </div>
+      {err && <div className="alert alert--danger" style={{ marginTop: 8 }}>{escapeHtml(err)}</div>}
+      <div className="btn-row" style={{ marginTop: 16 }}>
+        <button className="btn" disabled={!valid} onClick={onSubmit}>Save</button>
+        <button className="btn btn--ghost" onClick={onClose}>Cancel</button>
+      </div>
+    </ModalShell>
   );
 }
 
@@ -394,6 +562,99 @@ function EditSsoModal({ u, onClose, onSaved }: { u: SsoUserView; onClose: () => 
       <div className="btn-row" style={{ marginTop: 16 }}>
         <button className="btn" disabled={!valid || submitting} onClick={onSubmit}>
           {submitting ? 'Saving…' : 'Save'}
+        </button>
+        <button className="btn btn--ghost" onClick={onClose}>Cancel</button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/** Pre-fills displayName/role/team/title from an existing LOCAL/DEMO row,
+ *  asks the admin for an email, then creates an sso_users row. The local
+ *  /login entry is untouched — this *adds* SSO on top, not as a replacement. */
+function RegisterLocalForSsoModal({
+  u,
+  onClose,
+  onSaved
+}: {
+  u: AppUserT;
+  onClose: () => void;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<AppRoleT>(u.role);
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+  const onSubmit = async () => {
+    setSubmitting(true);
+    setErr(null);
+    try {
+      await SsoUsers.create({
+        email: email.trim(),
+        displayName: u.displayName,
+        username: u.username,
+        role,
+        team: u.team,
+        title: u.title,
+        enabled: u.enabled
+      });
+      await onSaved();
+    } catch (e: any) {
+      const msg = (e as Error)?.message || 'Failed to register';
+      setErr(/409|already/i.test(msg) ? `Email "${email}" is already registered.` : msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell title={`Allow SSO for ${u.displayName}`} onClose={onClose}>
+      <p className="text-muted text-sm" style={{ marginBottom: 12 }}>
+        Registers <strong>{escapeHtml(u.displayName)}</strong>'s identity in the SSO allowlist so they
+        can sign in via Microsoft Entra. The local /login entry remains intact —
+        this adds SSO on top, not as a replacement.
+      </p>
+      <div className="form__row">
+        <label className="form__label" htmlFor="registerSsoEmail">Email <span style={{ color: 'var(--color-danger)' }}>*</span></label>
+        <input
+          id="registerSsoEmail"
+          className="form__input"
+          type="email"
+          placeholder={`${u.username}@rainbowtech.com.hk`}
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          autoComplete="off"
+        />
+        <span className="form__hint text-muted">Case-insensitive. Must match what Azure returns in the ID token.</span>
+      </div>
+      <div className="form__row">
+        <label className="form__label" htmlFor="registerSsoRole">Role for SSO login</label>
+        <select
+          id="registerSsoRole"
+          className="form__select"
+          value={role}
+          onChange={e => setRole(e.target.value as AppRoleT)}
+        >
+          <option value="USER">User</option>
+          <option value="TASK_MANAGER">Task Manager</option>
+          <option value="ADMIN">Administrator</option>
+          <option value="AUDITOR">Auditor</option>
+        </select>
+        <span className="form__hint text-muted">Defaults to <code>{u.role}</code> from the local entry — change if you want SSO sign-in to grant a different role.</span>
+      </div>
+      <div className="text-muted text-sm" style={{ marginTop: 8 }}>
+        <div>Display name: <code>{escapeHtml(u.displayName)}</code></div>
+        <div>Username: <code>{escapeHtml(u.username)}</code></div>
+        <div>Team: <code>{escapeHtml(u.team)}</code></div>
+        <div>Title: <code>{escapeHtml(u.title)}</code></div>
+      </div>
+      {err && <div className="alert alert--danger" style={{ marginTop: 8 }}>{escapeHtml(err)}</div>}
+      <div className="btn-row" style={{ marginTop: 16 }}>
+        <button className="btn" disabled={!valid || submitting} onClick={onSubmit}>
+          {submitting ? 'Saving…' : 'Register for SSO'}
         </button>
         <button className="btn btn--ghost" onClick={onClose}>Cancel</button>
       </div>
