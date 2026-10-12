@@ -117,6 +117,28 @@ async function ensureSchema(): Promise<void> {
       updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_by        INTEGER
     );
+
+    -- Admin-controlled SSO allowlist. The bridge (/api/sso/callback) only
+    -- signs a user in if their email (case-insensitive) matches a row here.
+    -- Admins populate via /admin/users; empty by design at boot. The oid
+    -- column records the last-seen Azure OID (fire-and-forget side-effect).
+    CREATE TABLE IF NOT EXISTS sso_users (
+      id                                  SERIAL PRIMARY KEY,
+      email                               TEXT NOT NULL,
+      display_name                        TEXT NOT NULL,
+      username                            TEXT NOT NULL,
+      oid                                 TEXT,
+      role                                TEXT NOT NULL CHECK (role IN ('USER','TASK_MANAGER','ADMIN','AUDITOR')),
+      team                                TEXT NOT NULL DEFAULT 'SSO',
+      title                               TEXT NOT NULL DEFAULT '',
+      enabled                             BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by                          INTEGER,
+      updated_at                          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by                          INTEGER
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sso_users_email_lower ON sso_users (lower(email));
+    CREATE INDEX IF NOT EXISTS idx_sso_users_role ON sso_users (role);
   `);
   console.log('[db] schema ensured');
 }

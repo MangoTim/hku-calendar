@@ -29,7 +29,16 @@ import {
 } from './introspect.ts';
 import { initSso } from './sso.ts';
 import { getSsoConfig, saveSsoConfig, testSsoConnection } from './ssoConfig.ts';
+import {
+  listSsoUsers,
+  findSsoUserByEmail,
+  createSsoUser,
+  updateSsoUser,
+  deleteSsoUser,
+  SsoUserEmailTakenError
+} from './ssoUsers.ts';
 import type { HolidayFormat } from '../../src/lib/types.ts';
+import * as jose from 'jose';
 
 const PORT = Number(process.env.PORT || 8092);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -106,6 +115,140 @@ app.post('/api/sso/test', async (_req, res) => {
     res.json(r);
   } catch (e: any) {
     res.status(500).json({ error: (e as Error).message, ok: false, steps: [] });
+  }
+});
+
+// ----- SSO allowlist (admin-controlled) -----
+// /admin/users CRUDs these via /api/sso/users; /api/sso/users/lookup is the
+// read endpoint used by the FE bridge to map an Azure ID-token email to a
+// local account. The admin gate verifies the sso_session cookie matches an
+// enabled sso_users row with role='ADMIN' — same shape as the FE bootstrap.
+
+// Shared secret for the sso_session cookie. Mirror of sso.ts (kept private
+// to that module otherwise). Falling back to a stable demo default keeps
+// dev/test setups working; production sets SSO_COOKIE_SECRET via env.
+const COOKIE_SECRET = new TextEncoder().encode(
+  process.env.SSO_COOKIE_SECRET || 'demo-sso-cookie-secret-change-me'
+);
+
+async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  // Read raw cookie header (mirrors sso.ts readCookie — duplicated to keep
+  // sso.ts free of express middleware concerns).
+  const cookieHeader = req.headers.cookie || '';
+  const token = cookieHeader
+    .split(';')
+    .map(s => s.trim())
+    .find(s => s.startsWith('sso_session='))
+    ?.slice('sso_session='.length);
+  if (!token) return res.status(401).json({ error: 'no sso_session cookie' });
+  let p: any;
+  try {
+    const v = await jose.jwtVerify(decodeURIComponent(token), COOKIE_SECRET, { algorithms: ['HS256'] });
+    p = v.payload;
+  } catch {
+    return res.status(401).json({ error: 'invalid or expired sso_session' });
+  }
+  const email = String(p?.email || '').toLowerCase();
+  if (!email) return res.status(401).json({ error: 'sso_session has no email claim' });
+  const u = await findSsoUserByEmail(email);
+  if (!u) return res.status(403).json({ error: 'no admin account matches this SSO identity' });
+  if (!u.enabled) return res.status(403).json({ error: 'admin account is disabled' });
+  if (u.role !== 'ADMIN') return res.status(403).json({ error: 'admin role required' });
+  (req as any).adminUserId = u.id;
+  next();
+}
+
+// Public read — used by SsoFinish + AuthContext bootstrap.
+app.get('/api/sso/users/lookup', async (req, res) => {
+  const email = String(req.query.email || '').trim();
+  if (!email) return res.status(400).json({ error: 'email required' });
+  try {
+    const u = await findSsoUserByEmail(email);
+    res.json({ user: u });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Admin CRUD. Returns 409 on duplicate email so the FE can surface it as a
+// friendly toast; 404 for missing update/delete targets.
+const isSsoRole = (r: any): r is 'USER' | 'TASK_MANAGER' | 'ADMIN' | 'AUDITOR' =>
+  ['USER', 'TASK_MANAGER', 'ADMIN', 'AUDITOR'].includes(r);
+
+app.get('/api/sso/users', requireAdmin, async (_req, res) => {
+  try {
+    res.json({ users: await listSsoUsers() });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post('/api/sso/users', requireAdmin, async (req, res) => {
+  const b = req.body ?? {};
+  const email = String(b.email || '').trim();
+  const displayName = String(b.displayName || '').trim();
+  const role = b.role;
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'valid email required' });
+  if (!displayName) return res.status(400).json({ error: 'displayName required' });
+  if (!isSsoRole(role)) return res.status(400).json({ error: 'role must be USER | TASK_MANAGER | ADMIN | AUDITOR' });
+  try {
+    const u = await createSsoUser(
+      {
+        email,
+        displayName,
+        username: b.username || undefined,
+        role,
+        team: b.team || undefined,
+        title: b.title || undefined,
+        enabled: b.enabled === false ? false : true
+      },
+      (req as any).adminUserId
+    );
+    res.status(201).json({ user: u });
+  } catch (e: any) {
+    if (e instanceof SsoUserEmailTakenError) return res.status(409).json({ error: e.message });
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.put('/api/sso/users/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
+  const b = req.body ?? {};
+  const patch: any = {};
+  if (b.email !== undefined) {
+    const e = String(b.email).trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return res.status(400).json({ error: 'valid email required' });
+    patch.email = e;
+  }
+  if (b.displayName !== undefined) patch.displayName = String(b.displayName).trim();
+  if (b.username !== undefined)    patch.username    = String(b.username).trim();
+  if (b.team !== undefined)        patch.team        = String(b.team).trim();
+  if (b.title !== undefined)       patch.title       = String(b.title).trim();
+  if (b.role !== undefined) {
+    if (!isSsoRole(b.role)) return res.status(400).json({ error: 'role must be USER | TASK_MANAGER | ADMIN | AUDITOR' });
+    patch.role = b.role;
+  }
+  if (b.enabled !== undefined)     patch.enabled     = b.enabled === true;
+  try {
+    const u = await updateSsoUser(id, patch, (req as any).adminUserId);
+    if (!u) return res.status(404).json({ error: 'not found' });
+    res.json({ user: u });
+  } catch (e: any) {
+    if (e instanceof SsoUserEmailTakenError) return res.status(409).json({ error: e.message });
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.delete('/api/sso/users/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
+  try {
+    const ok = await deleteSsoUser(id);
+    if (!ok) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
   }
 });
 

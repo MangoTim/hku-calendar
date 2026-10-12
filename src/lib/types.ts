@@ -16,7 +16,12 @@ export interface User {
   team: string;
   title: string;
   role: Role;
-  source: 'LOCAL' | 'DEMO';
+  source: 'LOCAL' | 'DEMO' | 'SSO';
+  /** Email used as the SSO identity anchor (SSO users). Empty/undefined
+   *  for legacy seed users that pre-date the email matching bridge. */
+  email?: string;
+  /** Last-seen Azure OID (SSO users). Useful for admin auditing. */
+  oid?: string;
   enabled: boolean;
   morningTeamDigestEnabled: boolean;
   mondayTwoWeekLeaveReportEnabled: boolean;
@@ -29,7 +34,8 @@ export interface Session {
   role: Role;
   team: string;
   title: string;
-  source: 'LOCAL' | 'DEMO';
+  source: 'LOCAL' | 'DEMO' | 'SSO';
+  email?: string;
   loggedInAt: string;
 }
 

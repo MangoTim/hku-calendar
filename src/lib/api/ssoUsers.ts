@@ -1,0 +1,49 @@
+// SSO allowlist client — wraps the 5 endpoints that back /admin/users'
+// SSO-user section. `lookup(email)` is the read-only endpoint used by the
+// FE bridge to map an Azure ID-token email to a local account.
+//
+// Admin endpoints (`list/create/update/remove`) require a valid sso_session
+// cookie belonging to an ADMIN-role row in sso_users (gated by the server's
+// requireAdmin middleware). The cookie travels automatically with same-origin
+// jsonFetch calls.
+import { jsonFetch } from './fetch';
+import type { User } from '../types';
+
+export interface SsoUserView extends User {
+  /** Last-seen Azure OID. Server populates this on every successful login. */
+  oid?: string;
+}
+
+export type SsoUserInput = Pick<SsoUserView, 'email' | 'displayName' | 'role' | 'team' | 'title' | 'enabled'> & {
+  username?: string;
+};
+
+export const SsoUsers = {
+  async list(): Promise<{ users: SsoUserView[] }> {
+    return jsonFetch<{ users: SsoUserView[] }>('/api/sso/users');
+  },
+
+  async lookup(email: string): Promise<{ user: SsoUserView | null }> {
+    return jsonFetch<{ user: SsoUserView | null }>(
+      `/api/sso/users/lookup?email=${encodeURIComponent(email)}`
+    );
+  },
+
+  async create(input: SsoUserInput): Promise<{ user: SsoUserView }> {
+    return jsonFetch<{ user: SsoUserView }>('/api/sso/users', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
+  },
+
+  async update(id: number, input: Partial<SsoUserInput>): Promise<{ user: SsoUserView }> {
+    return jsonFetch<{ user: SsoUserView }>(`/api/sso/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(input)
+    });
+  },
+
+  async remove(id: number): Promise<{ ok: true }> {
+    return jsonFetch<{ ok: true }>(`/api/sso/users/${id}`, { method: 'DELETE' });
+  }
+};

@@ -68,6 +68,9 @@ export function ProfilePage() {
             <tbody>
               <tr><th>Display name</th><td>{escapeHtml(user.displayName)}</td></tr>
               <tr><th>Username</th><td><code>{escapeHtml(user.username)}</code></td></tr>
+              {user.email && (
+                <tr><th>Email</th><td><code>{escapeHtml(user.email)}</code></td></tr>
+              )}
               <tr><th>Title</th><td>{escapeHtml(user.title)}</td></tr>
               <tr><th>Team</th><td>{escapeHtml(user.team)}</td></tr>
               <tr><th>Role</th><td><span className="badge badge--info">{fmt.role(user.role)}</span></td></tr>
@@ -82,6 +85,10 @@ export function ProfilePage() {
               </tr>
             </tbody>
           </table>
+          <p className="text-muted text-sm" style={{ marginTop: 'var(--space-3)' }}>
+            Your email is the identity anchor used for SSO sign-in. Ask an administrator
+            on the <Link to="/admin/users">Users admin page</Link> to update it.
+          </p>
         </section>
 
         <section className="card">
@@ -121,11 +128,6 @@ export function ProfilePage() {
           </div>
         </section>
       </div>
-
-      <p className="text-muted text-sm" style={{ marginTop: 'var(--space-4)' }}>
-        Need to change your name or team? Ask an administrator on the{' '}
-        <Link to="/admin/users">Users admin page</Link>.
-      </p>
     </AppShell>
   );
 }

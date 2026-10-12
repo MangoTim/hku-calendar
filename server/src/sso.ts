@@ -24,6 +24,7 @@
 import type { Express, Request } from 'express';
 import * as jose from 'jose';
 import { getSsoConfig, type SsoDbConfig } from './ssoConfig.ts';
+import { recordSsoOidByEmail } from './ssoUsers.ts';
 
 const REDIRECT_URI  = process.env.SSO_REDIRECT_URI;
 const POST_LOGIN    = process.env.SSO_POST_LOGIN_REDIRECT || '/dashboard';
@@ -180,6 +181,10 @@ export function initSso(app: Express): void {
       maxAge: 8 * 60 * 60 * 1000,
       path: '/'
     });
+
+    // Record the Azure OID onto the matching sso_users row (if any). Fire-
+    // and-forget — a missing match (or DB error) doesn't affect this login.
+    recordSsoOidByEmail(email, oid).catch(() => { /* no-op */ });
 
     // 7. Render the success page. For a fully wired demo, redirect to
     // POST_LOGIN instead — but the user wanted to "see whether SSO works"

@@ -1,84 +1,121 @@
 // /sso-finish — the landing page the SSO success page redirects to with
 // oid/name/email as URL query params. This is the bridge from server-side
 // identity (set by /api/sso/callback) to localStorage-driven session
-// (which RequireAuth reads). Carrying identity through the URL avoids any
-// dependency on the sso_session cookie surviving the navigation.
+// (which RequireAuth reads).
 //
 // Flow:
 //   1. /api/sso/callback renders successHtml (HTML page)
 //   2. Inline <script> in successHtml calls /api/auth/session — gets the
 //      verified user from the cookie that *just* got set on this response
 //   3. Script window-replaces to /sso-finish?oid=…&name=…&email=…&return=/dashboard
-//   4. This component reads the params, calls Session.set() with the first
-//      enabled ADMIN (Grace Ng, id=4), and navigates to `return`.
-//
-// We do NOT trust the query params as-is (they're trivially editable in
-// the URL bar). They're only a delivery channel for the verified oid —
-// the FE auto-signs in as Grace Ng regardless of the param values. (Even
-// in the worst case, an attacker who forged this URL would just be
-// signed in as Grace Ng — same as they could already do by clicking the
-// Grace Ng row on /login.) Bridging via oid → userId map is a future
-// improvement when the directory lands.
+//   4. This component:
+//      a. If session already set (AuthProvider bootstrap won the race),
+//         navigate to `return` — no further work.
+//      b. Otherwise reads /api/auth/session again for the email
+//      c. Looks up the email against the admin-controlled sso_users
+//         allowlist via /api/sso/users/lookup
+//      d. If a row matches and is enabled → sign in as that row
+//      e. If no row matches → "No account registered" page
+//      f. If row matches but enabled=false → "Account disabled" page
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { USERS } from '../lib/data';
+import { SsoUsers } from '../lib/api/ssoUsers';
+
+type SsoError = {
+  email: string;
+  name: string;
+  oid: string;
+  reason?: 'not-registered' | 'disabled';
+};
 
 export function SsoFinish() {
   const [searchParams] = useSearchParams();
   const { session, signIn } = useAuth();
   const nav = useNavigate();
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SsoError | null>(null);
 
   useEffect(() => {
-    // If the cookie bridge already ran (LS populated during the AuthProvider
-    // bootstrap), just continue to the return URL — no need to sign in again.
+    // If the AuthProvider bootstrap already populated localStorage (because
+    // the same email maps to an enabled sso_users row), just continue to the
+    // return URL — no need to sign in again.
     if (session) {
       nav(searchParams.get('return') || '/dashboard', { replace: true });
       return;
     }
 
-    // Otherwise, sign in as the demo's first enabled ADMIN. We ignore the
-    // oid/name/email query params for the actual session creation — those
-    // are diagnostic only. (Future: oid → userId map.)
-    const local = USERS.find(u => u.role === 'ADMIN' && u.enabled);
-    if (!local) {
-      setError('No ADMIN user available to sign in as.');
-      return;
-    }
-
-    // Defensive: check that the SSO server can confirm the cookie is valid.
-    // If /api/auth/session returns {user: null}, don't sign in — the cookie
-    // may not have been set (e.g. user navigated here manually without
-    // going through the SSO flow).
     (async () => {
+      let ssoEmail = '';
+      let ssoName = '';
+      let ssoOid = '';
       try {
         const r = await fetch('/api/auth/session');
-        const { user } = await r.json() as { user: { oid: string; source: 'sso' } | null };
+        const { user } = await r.json() as { user: { oid: string; name: string; email: string; source: 'sso' } | null };
         if (!user || user.source !== 'sso') {
           // Not a real SSO session — bounce to /login instead of silently
-          // granting admin. (The query params are not trustworthy on their own.)
+          // granting anything.
           nav('/login', { replace: true });
           return;
         }
+        ssoEmail = user.email;
+        ssoName  = user.name;
+        ssoOid   = user.oid;
       } catch {
-        // Network error — fall through; Session.set below will at least
-        // give the user an authenticated session.
+        nav('/login', { replace: true });
+        return;
       }
-      signIn(local.id);
-      nav(searchParams.get('return') || '/dashboard', { replace: true });
+
+      if (!ssoEmail) {
+        // ID token had no email — can't match against the allowlist.
+        setError({ email: '', name: ssoName, oid: ssoOid, reason: 'not-registered' });
+        return;
+      }
+
+      try {
+        const { user: local } = await SsoUsers.lookup(ssoEmail);
+        if (!local) {
+          setError({ email: ssoEmail, name: ssoName, oid: ssoOid, reason: 'not-registered' });
+          return;
+        }
+        if (!local.enabled) {
+          setError({ email: ssoEmail, name: ssoName, oid: ssoOid, reason: 'disabled' });
+          return;
+        }
+        signIn(local.id);
+        nav(searchParams.get('return') || '/dashboard', { replace: true });
+      } catch {
+        // Lookup itself failed (500 etc.) — treat as not-registered so the
+        // user isn't silently signed in by an attacker who crashed the
+        // lookup endpoint.
+        setError({ email: ssoEmail, name: ssoName, oid: ssoOid, reason: 'not-registered' });
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (error) {
+    const isDisabled = error.reason === 'disabled';
     return (
-      <div style={{ padding: 48, fontFamily: 'system-ui', color: '#64748b', textAlign: 'center' }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
-        <div>{error}</div>
+      <div style={{ padding: 48, fontFamily: 'system-ui', color: '#64748b', textAlign: 'center', background: '#0f172a', minHeight: '100vh' }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>{isDisabled ? '🚫' : '🔒'}</div>
+        <div style={{ fontSize: 18, color: '#e2e8f0', marginBottom: 8 }}>
+          {isDisabled ? 'Account is disabled' : 'No account is registered for your sign-in'}
+        </div>
+        <div style={{ marginBottom: 4 }}>
+          Signed in as <code style={{ color: '#94a3b8' }}>{error.name || '(no name)'}</code>
+        </div>
+        {error.email && (
+          <div style={{ marginBottom: 16 }}>
+            <code style={{ color: '#94a3b8' }}>{error.email}</code>
+          </div>
+        )}
+        <div style={{ fontSize: 13, color: '#64748b', maxWidth: 480, margin: '0 auto 20px' }}>
+          {isDisabled
+            ? 'An administrator has disabled your account. Contact them to re-enable access, then try again.'
+            : 'An administrator must add your email to the SSO allowlist on /admin/users before you can sign in. Pick a different sign-in method below, or ask your administrator for access.'}
+        </div>
         <button
           className="btn"
-          style={{ marginTop: 16 }}
           onClick={() => nav('/login', { replace: true })}
         >
           Go to login

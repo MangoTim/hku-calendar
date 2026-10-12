@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { Session, ROLE } from '../lib/app';
 import type { Session as SessionType, User, Role } from '../lib/types';
 import { USERS } from '../lib/data';
+import { SsoUsers } from '../lib/api/ssoUsers';
 
 interface AuthCtx {
   session: SessionType | null;
@@ -27,12 +28,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [bootstrapping, setBootstrapping] = useState<boolean>(() => Session.get() === null);
 
   // SSO bootstrap: runs once on mount. If /api/auth/session returns a user
-  // (proving the sso_session cookie is valid), map to the first enabled
-  // ADMIN in USERS (Grace Ng today — id=4) and populate localStorage so
-  // RequireAuth sees a session on the next render.
-  //
-  // TODO: replace the always-ADMIN mapping with an oid → userId map in
-  // data.ts once the directory is wired (search & provision phase).
+  // (proving the sso_session cookie is valid), look up the email in the
+  // admin-controlled sso_users allowlist and sign in as that row. If the
+  // email isn't registered, fall through to /login (RequireAuth will
+  // bounce automatically once the gate clears).
   useEffect(() => {
     if (Session.get()) {
       // Already signed in via the local picker — no SSO probe needed.
@@ -45,10 +44,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const r = await fetch('/api/auth/session');
         const { user } = await r.json() as { user: { oid: string; name: string; email: string; source: 'sso' } | null };
         if (!active) return;
-        if (user && user.source === 'sso' && user.oid) {
-          const local = USERS.find(u => u.role === 'ADMIN' && u.enabled);
-          if (local) {
-            const s = Session.set(local);
+        if (user && user.source === 'sso' && user.email) {
+          const { user: row } = await SsoUsers.lookup(user.email);
+          if (!active) return;
+          if (row && row.enabled) {
+            // Hydrate the local USERS array with fields the DB row has
+            // but the bundle doesn't (email, oid) so Session.set carries
+            // them through.
+            const hydrated: User = {
+              ...USERS.find(u => u.id === row.id) ?? row,
+              ...row
+            };
+            const s = Session.set(hydrated);
             setSession(s);
           }
         }
