@@ -360,14 +360,13 @@ function successHtml(u: {
     .footer { margin-top: 24px; font-size: 13px; color: #94a3b8; border-top: 1px solid #334155; padding-top: 16px; }
   </style>
   <script>
-    // Auto-bridge to /sso-finish with the verified identity carried as URL
-    // query params. This avoids depending on the sso_session cookie being
-    // preserved across the navigation (some browsers/configs drop it on
-    // same-origin GETs that follow a server-rendered HTML response).
-    //
-    // The script runs ASYNCHRONOUSLY (deferred) so the success card
-    // renders first — useful when the network is slow, and lets a manual
-    // "Continue" click still work as a fallback.
+    // Bridge the verified identity onto the manual Continue button instead
+    // of auto-navigating. Previously this called location.replace() to jump
+    // straight to /sso-finish, but users reported the success card flashing
+    // past in ~1 second without the chance to read/click it. Now the card
+    // stays put; clicking Continue passes the oid/name/email + return URL
+    // through /sso-finish, which re-validates the cookie and signs the user
+    // in.
     //
     // JSON.stringify() here keeps Microsoft's JWT payload values safe to
     // concatenate into JS source — escapeHtml already kept them safe in
@@ -384,8 +383,9 @@ function successHtml(u: {
           email: user.email || '',
           return: ${JSON.stringify(u.postLoginUrl)}
         });
-        location.replace('/sso-finish?' + params.toString());
-      }).catch(function () { /* stay on the success card; user can hit Continue */ });
+        var cont = document.getElementById('sso-continue');
+        if (cont) cont.href = '/sso-finish?' + params.toString();
+      }).catch(function () { /* leave Continue at its static href */ });
     });
   </script>
 </head>
@@ -403,7 +403,7 @@ function successHtml(u: {
     <a class="btn" id="sso-continue" href="${escapeHtml(u.postLoginUrl)}">→ Continue to ${escapeHtml(u.postLoginUrl)}</a>
     <div class="footer">
       Round-trip complete: <code>/api/sso/login</code> → Azure AD → <code>/api/sso/callback</code> (code exchanged, ID token verified, session cookie set).<br />
-      Auto-redirecting you to the dashboard in a moment. If nothing happens, click <strong>Continue</strong>.
+      Click <strong>Continue</strong> to finish signing in.
     </div>
   </div>
 </body>

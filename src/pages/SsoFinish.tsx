@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { SsoUsers } from '../lib/api/ssoUsers';
+import { Session } from '../lib/app';
 
 type SsoError = {
   email: string;
@@ -79,6 +80,14 @@ export function SsoFinish() {
         }
         if (!local.enabled) {
           setError({ email: ssoEmail, name: ssoName, oid: ssoOid, reason: 'disabled' });
+          return;
+        }
+        // Defensive: AuthProvider's bootstrap effect may have already
+        // signed us in during the awaits above. If so, just navigate —
+        // calling signIn(local.id) would re-look-up by id in USERS and
+        // potentially collide with a seed user sharing that serial.
+        if (Session.get()) {
+          nav(searchParams.get('return') || '/dashboard', { replace: true });
           return;
         }
         signIn(local.id);

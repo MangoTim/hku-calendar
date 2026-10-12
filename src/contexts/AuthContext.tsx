@@ -148,7 +148,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthCtx>(() => ({
     session,
-    user: session ? USERS.find(u => u.id === session.userId) ?? null : null,
+    // Derive the User view from the session fields directly instead of
+    // re-looking-up `session.userId` in USERS. SSO `sso_users` rows use
+    // the same SERIAL sequence as the seed USERS array (both start at 1),
+    // so a colliding id would otherwise pull a *seed* user — e.g. an SSO
+    // Tim Wong (sso_users.id=1) would render as Prof. Alan Wong
+    // (USERS[0].id=1) in any page reading user.displayName / user.team.
+    // Session already carries displayName/team/title/role/source/email, so
+    // we just rebuild a User view from those. Digest flags aren't carried
+    // in the session; Profile reads them via LS overrides keyed by id.
+    user: session ? {
+      id: session.userId,
+      username: session.username,
+      displayName: session.displayName,
+      role: session.role,
+      team: session.team,
+      title: session.title,
+      source: session.source,
+      email: session.email,
+      enabled: true,
+      morningTeamDigestEnabled: true,
+      mondayTwoWeekLeaveReportEnabled: false
+    } : null,
     signIn,
     signOut,
     hasRole,
