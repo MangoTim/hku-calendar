@@ -140,8 +140,8 @@ async function ensureSchema(): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sso_users_email_lower ON sso_users (lower(email));
     CREATE INDEX IF NOT EXISTS idx_sso_users_role ON sso_users (role);
 
-    -- Id-rebase: keep sso_users.id out of the seed USERS range (1–21) so
-    -- the FE's `findById` lookup can never collide with a seed row by
+    -- Id-rebase: keep sso_users.id out of the seed USERS range (1-21) so
+    -- the FE's findById lookup can never collide with a seed row by
     -- accident. Idempotent: no-op once every row sits at id >= 10000.
     -- Future inserts get ids from sso_users_id_seq (now RESTARTed past
     -- 10000). Email is still the single source of truth for sign-in
