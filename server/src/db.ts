@@ -139,6 +139,29 @@ async function ensureSchema(): Promise<void> {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sso_users_email_lower ON sso_users (lower(email));
     CREATE INDEX IF NOT EXISTS idx_sso_users_role ON sso_users (role);
+
+    -- Id-rebase: keep sso_users.id out of the seed USERS range (1–21) so
+    -- the FE's `findById` lookup can never collide with a seed row by
+    -- accident. Idempotent: no-op once every row sits at id >= 10000.
+    -- Future inserts get ids from sso_users_id_seq (now RESTARTed past
+    -- 10000). Email is still the single source of truth for sign-in
+    -- (the sso_session cookie carries email, not id) so existing
+    -- cookies keep working through the migration.
+    DO $$
+    DECLARE
+      colliding_count INTEGER;
+      next_id         BIGINT;
+      seq_name        TEXT;
+    BEGIN
+      SELECT COUNT(*) INTO colliding_count FROM sso_users WHERE id < 10000;
+      IF colliding_count > 0 THEN
+        UPDATE sso_users SET id = id + 10000 WHERE id < 10000;
+        SELECT COALESCE(MAX(id), 10000) + 1 INTO next_id FROM sso_users;
+        seq_name := pg_get_serial_sequence('sso_users', 'id');
+        EXECUTE format('ALTER SEQUENCE %I RESTART WITH %s', seq_name, next_id);
+        RAISE NOTICE '[db] sso_users: rebased % row(s) past collision range (next id = %)', colliding_count, next_id;
+      END IF;
+    END $$;
   `);
   console.log('[db] schema ensured');
 }
