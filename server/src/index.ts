@@ -318,9 +318,12 @@ app.get('/api/sso/users', requireAdmin, async (_req, res) => {
 // admin) so the FE can populate Assignee / Person / Booker dropdowns in
 // Tasks / Leave / Bookings without each non-admin user hitting 403. The
 // payload is the same shape — full sso_users rows minus nothing.
-app.get('/api/sso/users/directory', requireSignedIn, async (_req, res) => {
+app.get('/api/sso/users/directory', requireSignedIn, async (req, res) => {
   try {
-    res.json({ users: await listSsoUsers() });
+    const users = await listSsoUsers();
+    // eslint-disable-next-line no-console
+    console.info(`[sso/directory] userId=${(req as any).userId} source=${(req as any).userSource} -> ${users.length} rows`);
+    res.json({ users });
   } catch (e: any) {
     res.status(500).json({ error: (e as Error).message });
   }
