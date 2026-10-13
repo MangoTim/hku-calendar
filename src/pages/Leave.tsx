@@ -177,12 +177,19 @@ export function LeavePage() {
         <h2>Legend</h2>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
           {Leave.typesAll().map(t => (
-            <span key={t.code}>
+            <span key={t.code} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <span
                 className={`chip chip--leave-${t.color}`}
                 style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}
               >
                 {t.label}
+              </span>
+              <span
+                className={`chip chip--leave-${t.color} chip--mine`}
+                style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}
+                title="Yours — shown when this is your own leave"
+              >
+                {t.label} (you)
               </span>
             </span>
           ))}
@@ -344,10 +351,10 @@ function DayGrid({ anchor, leaveOnDay, currentUserId }: {
                 const meta = Leave.typeMeta(l.type);
                 const isMine = l.userId === currentUserId;
                 return (
-                  <tr key={l.id} className={isMine ? 'is-mine' : ''}>
+                  <tr key={l.id} className={isMine ? `is-mine is-mine-${meta.color}` : ''}>
                     <td>
                       <Link to={`/leave/${l.id}`}>
-                        {u?.displayName || '—'}{isMine ? <span className="text-sm" style={{ marginLeft: 6, color: '#1e3a8a', fontWeight: 600 }}>(you)</span> : null}
+                        {u?.displayName || '—'}{isMine ? <span className="text-sm" style={{ marginLeft: 6, fontWeight: 600 }}>(you)</span> : null}
                       </Link>
                     </td>
                     <td>{u?.team || ''}</td>

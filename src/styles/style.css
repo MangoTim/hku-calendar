@@ -770,19 +770,51 @@ option:hover, option:focus, option:checked, option:active {
 .chip--leave-purple  { background: #ede9fe; color: #5b21b6; border-left-color: #7c3aed; }
 .chip--leave-muted   { background: #e5e7eb; color: #374151; border-left-color: #6b7280; }
 
-/* "Mine" highlight — the chip belongs to the signed-in user. Applied
-   alongside any chip--leave-* variant in Bookings/Leave calendars so the
-   current user's plans read as "their" calendar at a glance. The deep blue
-   with white text (13:1 contrast, AAA) deliberately inverts the usual
-   dark-text-on-light pattern so "mine" pops out of a row of light chips.
-   Chained (.chip.chip--mine) to tie the specificity at (0,3,0) and
-   placed AFTER the leave variants so source order also favors mine when a
-   chip carries BOTH a leave type and a mine marker. */
-.cal .chip.chip--mine { background: #1e3a8a; color: #ffffff; border-left-color: #1e40af; font-weight: 600; }
-.chip.chip--mine       { background: #1e3a8a; color: #ffffff; border-left-color: #1e40af; font-weight: 600; }
-/* Day-view table row tint so the "my leave" entry is obvious in the list */
-.table tr.is-mine td { background: rgba(30, 58, 138, 0.08); }
-.table tr.is-mine td:first-child { font-weight: 600; color: #1e3a8a; }
+/* "Mine" highlight — the chip belongs to the signed-in user. Each leave
+   type has its OWN "mine" variant so the highlight stays in the same
+   color family (darker blue for primary leave, darker red for sick
+   leave, darker grey for personal, etc.) rather than always rendering
+   deep blue. The chip's normal text color is reused as the background;
+   white text on those dark colors stays well above WCAG AA contrast.
+   Chained (.chip.chip--mine + type variant) to tie the specificity at
+   (0,4,0) so this overrides the plain type rule reliably. */
+/* Bookings (no type, always uses primary blue for "mine") */
+.cal .chip.chip--mine,
+.chip.chip--mine        { background: #1e3a8a; color: #ffffff; border-left-color: #1e40af; font-weight: 600; }
+/* Leave — darker shade of each type's own color */
+.cal .chip.chip--leave-primary.chip--mine,
+.chip.chip--leave-primary.chip--mine  { background: #1e3a8a; color: #ffffff; border-left-color: #1e40af; font-weight: 600; }
+.cal .chip.chip--leave-danger.chip--mine,
+.chip.chip--leave-danger.chip--mine   { background: #991b1b; color: #ffffff; border-left-color: #7f1d1d; font-weight: 600; }
+.cal .chip.chip--leave-warning.chip--mine,
+.chip.chip--leave-warning.chip--mine  { background: #92400e; color: #ffffff; border-left-color: #78350f; font-weight: 600; }
+.cal .chip.chip--leave-success.chip--mine,
+.chip.chip--leave-success.chip--mine  { background: #065f46; color: #ffffff; border-left-color: #064e3b; font-weight: 600; }
+.cal .chip.chip--leave-info.chip--mine,
+.chip.chip--leave-info.chip--mine     { background: #075985; color: #ffffff; border-left-color: #0c4a6e; font-weight: 600; }
+.cal .chip.chip--leave-purple.chip--mine,
+.chip.chip--leave-purple.chip--mine   { background: #5b21b6; color: #ffffff; border-left-color: #4c1d95; font-weight: 600; }
+.cal .chip.chip--leave-muted.chip--mine,
+.chip.chip--leave-muted.chip--mine    { background: #374151; color: #ffffff; border-left-color: #1f2937; font-weight: 600; }
+
+/* Day-view table row tint — per-type, mirroring the chip family so the
+   "this row is mine" hint reinforces the type color. 8% alpha keeps the
+   text readable while still being clearly tinted. */
+.table tr.is-mine.is-mine-primary td { background: rgba(30, 58, 138, 0.08); }
+.table tr.is-mine.is-mine-danger  td { background: rgba(153, 27, 27, 0.08); }
+.table tr.is-mine.is-mine-warning td { background: rgba(146, 64, 14, 0.08); }
+.table tr.is-mine.is-mine-success td { background: rgba(6, 95, 70, 0.08); }
+.table tr.is-mine.is-mine-info    td { background: rgba(7, 89, 133, 0.08); }
+.table tr.is-mine.is-mine-purple  td { background: rgba(91, 33, 182, 0.08); }
+.table tr.is-mine.is-mine-muted   td { background: rgba(55, 65, 81, 0.08); }
+.table tr.is-mine td:first-child   { font-weight: 600; }
+.table tr.is-mine-primary td:first-child { color: #1e3a8a; }
+.table tr.is-mine-danger  td:first-child { color: #991b1b; }
+.table tr.is-mine-warning td:first-child { color: #92400e; }
+.table tr.is-mine-success td:first-child { color: #065f46; }
+.table tr.is-mine-info    td:first-child { color: #075985; }
+.table tr.is-mine-purple  td:first-child { color: #5b21b6; }
+.table tr.is-mine-muted   td:first-child { color: #374151; }
 
 /* ---------- Dashboard calendar (multi-source chips) ----------
    The summary calendar under the Dashboard shows bookings, leave, and task
