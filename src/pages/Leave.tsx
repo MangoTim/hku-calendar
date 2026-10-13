@@ -177,19 +177,12 @@ export function LeavePage() {
         <h2>Legend</h2>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
           {Leave.typesAll().map(t => (
-            <span key={t.code} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <span key={t.code}>
               <span
                 className={`chip chip--leave-${t.color}`}
                 style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}
               >
                 {t.label}
-              </span>
-              <span
-                className={`chip chip--leave-${t.color} chip--mine`}
-                style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}
-                title="Yours — shown when this is your own leave"
-              >
-                {t.label} (you)
               </span>
             </span>
           ))}
