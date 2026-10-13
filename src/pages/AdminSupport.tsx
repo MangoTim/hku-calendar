@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { EmailApi } from '../lib/api/email';
-import type { EmailTemplate, EmailTemplateVariable, ItSupportPreviewPayload } from '../lib/api/email';
+import type { EmailTemplate, EmailConfig, EmailTemplateVariable, ItSupportPreviewPayload } from '../lib/api/email';
 import { fmt, escapeHtml } from '../lib/app';
 
 const SAMPLE_BOOKING: ItSupportPreviewPayload = {
@@ -43,6 +43,13 @@ export function AdminSupport() {
   const [success, setSuccess] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [preview, setPreview] = useState<{ subject: string; text: string; html: string } | null>(null);
+
+  // IT team email config (separate from template — changes the recipient, not the body)
+  const [emailConfig, setEmailConfig] = useState<EmailConfig | null>(null);
+  const [draftEmail, setDraftEmail] = useState('');
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [emailDirty, setEmailDirty] = useState(false);
+  const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
 
   // Load templates + variable reference once.
   useEffect(() => {
@@ -83,6 +90,44 @@ export function AdminSupport() {
       .catch(e => { if (!cancelled) setError((e as Error).message); });
     return () => { cancelled = true; };
   }, [selectedCode]);
+
+  // Load current IT team email config once.
+  useEffect(() => {
+    let cancelled = false;
+    EmailApi.config()
+      .then(r => { if (!cancelled) { setEmailConfig(r); setDraftEmail(r.itTeamEmail); } })
+      .catch(() => { /* non-fatal — config section hides */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Track email-field dirtiness against the live config.
+  useEffect(() => {
+    if (!emailConfig) return;
+    setEmailDirty(draftEmail.trim() !== emailConfig.itTeamEmail);
+  }, [draftEmail, emailConfig]);
+
+  const onSaveEmail = async () => {
+    const trimmed = draftEmail.trim();
+    if (!trimmed) { setError('IT team email is required.'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setError(`"${trimmed}" does not look like an email address.`);
+      return;
+    }
+    setSavingEmail(true);
+    setError(null);
+    setEmailSuccess(null);
+    try {
+      const r = await EmailApi.updateConfig(trimmed);
+      setEmailConfig(prev => prev ? { ...prev, itTeamEmail: r.itTeamEmail, source: 'db' } : prev);
+      setEmailSuccess(`IT team email saved → ${r.itTeamEmail}. The next IT-support booking will go here.`);
+      setEmailDirty(false);
+      setTimeout(() => setEmailSuccess(null), 4000);
+    } catch (e: any) {
+      setError(e?.message || 'Could not save IT team email.');
+    } finally {
+      setSavingEmail(false);
+    }
+  };
 
   // Detect dirtiness against the freshly-loaded row so Save is gated.
   useEffect(() => {
@@ -167,6 +212,69 @@ export function AdminSupport() {
 
       {error && <div className="alert alert--danger" role="alert">⚠️ {escapeHtml(error)}</div>}
       {success && <div className="alert alert--success" role="alert">✓ {escapeHtml(success)}</div>}
+      {emailSuccess && <div className="alert alert--success" role="alert">✓ {escapeHtml(emailSuccess)}</div>}
+
+      {/* ---- IT team email ---- */}
+      {emailConfig && (
+        <section className="card" style={{ marginTop: 'var(--space-3)' }}>
+          <div className="page-header" style={{ marginBottom: 'var(--space-3)' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>IT team email</h2>
+              <div className="text-muted text-sm" style={{ marginTop: 4 }}>
+                Recipient for every IT-support booking notification. Stored in the <code>app_config</code> table
+                so it can change at runtime.
+              </div>
+            </div>
+            <span
+              className={`badge badge--${emailConfig.source === 'db' ? 'success' : emailConfig.source === 'env' ? 'muted' : 'warning'}`}
+              title={emailConfig.source === 'db' ? 'Saved to the database by an admin' : emailConfig.source === 'env' ? 'Container -e IT_TEAM_EMAIL env var' : 'Build-time default (no env, no DB override)'}
+            >
+              source: {emailConfig.source}
+            </span>
+          </div>
+
+          <div className="form__row">
+            <label className="form__label" htmlFor="itEmail">Recipient email</label>
+            <input
+              id="itEmail"
+              type="email"
+              className="form__input"
+              value={draftEmail}
+              onChange={e => setDraftEmail(e.target.value)}
+              placeholder="it-team@example.com"
+              maxLength={200}
+              autoComplete="off"
+            />
+            <span className="form__hint text-muted">
+              The next IT-support booking email will go to this address. Reply-To stays set to the booker so IT can reply to them directly.
+              {emailConfig.source !== 'db' && (
+                <>
+                  {' '}Saving will switch the badge to <code>db</code>; the env var / default still exists as a fallback if the row is cleared later.
+                </>
+              )}
+            </span>
+          </div>
+
+          <div className="form__actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setDraftEmail(emailConfig.itTeamEmail)}
+              disabled={savingEmail || !emailDirty}
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={onSaveEmail}
+              disabled={savingEmail || !emailDirty || !draftEmail.trim()}
+            >
+              {savingEmail ? 'Saving…' : 'Save IT email'}
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* ---- Template picker ---- */}
       <section className="card" style={{ marginTop: 'var(--space-3)' }}>

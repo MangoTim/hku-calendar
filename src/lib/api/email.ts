@@ -7,6 +7,9 @@ export interface EmailConfig {
   smtpHost: string;
   smtpPort: number;
   from: string;
+  /** 'db' = admin override in app_config; 'env' = container -e flag;
+   *  'default' = neither set, build default used. */
+  source?: 'db' | 'env' | 'default';
 }
 
 export interface ItSupportPayload {
@@ -47,6 +50,11 @@ export interface ItSupportPreviewPayload {
 
 export const EmailApi = {
   config: (): Promise<EmailConfig> => jsonFetch<EmailConfig>('/api/email/config'),
+  updateConfig: (itTeamEmail: string): Promise<{ itTeamEmail: string; source: 'db' }> =>
+    jsonFetch<{ itTeamEmail: string; source: 'db' }>('/api/email/config', {
+      method: 'PUT',
+      body: JSON.stringify({ itTeamEmail })
+    }),
   sendItSupport: (payload: ItSupportPayload): Promise<{ ok: true; messageId: string }> =>
     jsonFetch<{ ok: true; messageId: string }>('/api/email/it-support', {
       method: 'POST',

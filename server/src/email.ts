@@ -17,6 +17,7 @@
 
 import nodemailer, { type Transporter } from 'nodemailer';
 import { getEmailTemplate, renderTemplate, type EmailTemplate } from './emailTemplates.ts';
+import { getConfigValue } from './appConfig.ts';
 
 export interface EmailMessage {
   to: string;
@@ -63,12 +64,21 @@ function transporter(): Transporter {
   return _transporter;
 }
 
-export function smtpConfig() {
+export async function smtpConfig() {
+  // IT team email: admins can override the env-baked address at runtime via
+  // /admin/support. Falls back to IT_TEAM_EMAIL env var (or the build's
+  // hardcoded default) when the DB row is empty so a fresh deploy with no
+  // prior admin edit still works.
+  const dbItTeam = await getConfigValue('IT_TEAM_EMAIL').catch(() => null);
+  const itTeamEmail =
+    (dbItTeam && dbItTeam.trim()) ||
+    process.env.IT_TEAM_EMAIL ||
+    'tim.wong@systex.com.hk';
   return {
     host: process.env.SMTP_HOST || '127.0.0.1',
     port: Number(process.env.SMTP_PORT || 25),
     from: process.env.SMTP_FROM || 'ENGG Intranet <noreply@intranet.engg.hku.hk>',
-    itTeamEmail: process.env.IT_TEAM_EMAIL || 'tim.wong@systex.com.hk'
+    itTeamEmail
   };
 }
 
@@ -76,7 +86,7 @@ export function smtpConfig() {
  *  failure. Caller is expected to log + audit, NOT to fail the request. */
 export async function sendMail(msg: EmailMessage): Promise<{ messageId: string }> {
   const t = transporter();
-  const cfg = smtpConfig();
+  const cfg = await smtpConfig();
   const info = await t.sendMail({
     from: cfg.from,
     to: msg.to,
@@ -92,7 +102,7 @@ export async function sendMail(msg: EmailMessage): Promise<{ messageId: string }
  *  uses the editable `IT_SUPPORT` template from email_templates; falls
  *  back to a built-in default if the row is missing or empty. */
 export async function sendItSupportEmail(b: ItSupportBooking): Promise<{ messageId: string }> {
-  const cfg = smtpConfig();
+  const cfg = await smtpConfig();
   const tmpl = await loadTemplate('IT_SUPPORT', b);
   const subject = renderTemplate(tmpl.subject, {
     ref: b.ref, date: b.date, startTime: b.startTime, endTime: b.endTime, room: b.room

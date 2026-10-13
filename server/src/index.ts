@@ -29,6 +29,7 @@ import {
 } from './introspect.ts';
 import { initSso } from './sso.ts';
 import { getSsoConfig, saveSsoConfig, testSsoConnection } from './ssoConfig.ts';
+import { getConfigValue, setConfigValue } from './appConfig.ts';
 // Shared secret for sso_session and local_admin cookies. Lives in its own
 // module so the default literal is the same in both the signer (sso.ts)
 // and the verifier (index.ts) — otherwise an SSO-signed-in admin can
@@ -722,15 +723,23 @@ import { sendMail, sendItSupportEmail, smtpConfig } from './email.ts';
 // booking form. Returns the resolved IT team address (so FE doesn't
 // need to know about env defaults) and the SMTP host (so the FE can
 // show a "smtp not configured" warning if it's pointed at localhost
-// but Postfix isn't actually running).
-app.get('/api/email/config', (_req, res) => {
-  const cfg = smtpConfig();
-  res.json({
-    itTeamEmail: cfg.itTeamEmail,
-    smtpHost: cfg.host,
-    smtpPort: cfg.port,
-    from: cfg.from
-  });
+// but Postfix isn't actually running). `source` is 'db' when the
+// admin has overridden the value, 'env' when falling back to the
+// container's -e flag, or 'default' when neither is set.
+app.get('/api/email/config', async (_req, res) => {
+  try {
+    const cfg = await smtpConfig();
+    const dbIt = await getConfigValue('IT_TEAM_EMAIL').catch(() => null);
+    res.json({
+      itTeamEmail: cfg.itTeamEmail,
+      smtpHost: cfg.host,
+      smtpPort: cfg.port,
+      from: cfg.from,
+      source: dbIt && dbIt.trim() ? 'db' : (process.env.IT_TEAM_EMAIL ? 'env' : 'default')
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 // IT-support email for a booking. Called by BookingForm after a
@@ -772,7 +781,7 @@ app.post('/api/email/it-support', async (req, res) => {
       actionType: 'EMAIL_IT_SUPPORT_SENT',
       resourceType: 'booking',
       resourceId: String(b.ref),
-      summary: `IT support email sent for ${b.ref} (${b.date} ${b.startTime}-${b.endTime} ${b.room}) -> ${smtpConfig().itTeamEmail}`,
+      summary: `IT support email sent for ${b.ref} (${b.date} ${b.startTime}-${b.endTime} ${b.room}) -> ${(await smtpConfig()).itTeamEmail}`,
       ipAddress: clientIp(req)
     });
     res.json({ ok: true, messageId: r.messageId });
@@ -928,6 +937,45 @@ app.post('/api/email/templates/:code/preview', requireAdmin, async (req, res) =>
       ipAddress: clientIp(req)
     });
     res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * Editable email config — today just IT_TEAM_EMAIL (the address the
+ * /api/email/it-support endpoint sends to). The row lives in PostgreSQL so
+ * admins can change it without restarting the container; smtpConfig()
+ * reads from this row at send time and falls back to the env-baked value
+ * if the row is empty. Write requires requireAdmin + the change is
+ * audited as EMAIL_CONFIG_UPDATE.
+ */
+app.put('/api/email/config', requireAdmin, async (req, res) => {
+  const b = req.body ?? {};
+  const itTeamEmail = String(b.itTeamEmail || '').trim();
+  // Lightweight email format check — reject obvious junk without being
+  // dogmatic about RFC 5322. The IT team is expected to type a real
+  // address; if they want to clear it they should pass `null`.
+  const okEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+  if (!itTeamEmail) {
+    return res.status(400).json({ error: 'itTeamEmail is required (pass null to clear)' });
+  }
+  if (!okEmail(itTeamEmail)) {
+    return res.status(400).json({ error: `"${itTeamEmail}" does not look like an email address` });
+  }
+  const previous = await getConfigValue('IT_TEAM_EMAIL').catch(() => '');
+  try {
+    await setConfigValue('IT_TEAM_EMAIL', itTeamEmail, (req as any).adminUserId);
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: 'EMAIL_CONFIG_UPDATE',
+      resourceType: 'app_config',
+      resourceId: 'IT_TEAM_EMAIL',
+      summary: `IT_TEAM_EMAIL: "${previous}" -> "${itTeamEmail}"`,
+      ipAddress: clientIp(req)
+    });
+    res.json({ itTeamEmail, source: 'db' });
   } catch (e: any) {
     res.status(500).json({ error: (e as Error).message });
   }

@@ -36,7 +36,8 @@ export type AuditAction =
   | 'EMAIL_TEST_SENT'
   | 'EMAIL_TEST_FAILED'
   | 'EMAIL_TEMPLATE_UPDATE'
-  | 'EMAIL_TEMPLATE_RENDER';
+  | 'EMAIL_TEMPLATE_RENDER'
+  | 'EMAIL_CONFIG_UPDATE';
 
 export interface AuditParams {
   actorUsername: string;

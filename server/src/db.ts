@@ -158,6 +158,22 @@ async function ensureSchema(): Promise<void> {
       updated_by    INTEGER
     );
 
+    -- Key-value store for runtime-editable app config (e.g. the IT team
+    -- email used by /api/email/it-support). The row is seeded with an
+    -- empty value on first boot if missing; smtpConfig() then falls
+    -- back to the IT_TEAM_EMAIL env var when the row is empty so a
+    -- bare dev deploy without IT_TEAM_EMAIL set still gets a sensible
+    -- value. Admins edit via /admin/support and the next IT-support
+    -- email pick up the new value (no restart needed).
+    CREATE TABLE IF NOT EXISTS app_config (
+      key         TEXT PRIMARY KEY,
+      value       TEXT NOT NULL DEFAULT '',
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by  INTEGER
+    );
+    INSERT INTO app_config (key, value) VALUES ('IT_TEAM_EMAIL', '')
+      ON CONFLICT (key) DO NOTHING;
+
     -- Id-rebase: keep sso_users.id out of the seed USERS range (1-21) so
     -- the FE's findById lookup can never collide with a seed row by
     -- accident. Idempotent: no-op once every row sits at id >= 10000.
