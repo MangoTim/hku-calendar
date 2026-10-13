@@ -20,6 +20,31 @@ export interface ItSupportPayload {
   booker: { name: string; email: string; team: string };
 }
 
+export interface EmailTemplate {
+  code: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml: string | null;
+  description: string;
+  updatedAt: string;
+}
+
+export interface EmailTemplateVariable {
+  name: string;
+  description: string;
+}
+
+export interface ItSupportPreviewPayload {
+  ref: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  room: string;
+  purpose: string;
+  supportRequests: string;
+  booker: { name: string; email: string; team: string };
+}
+
 export const EmailApi = {
   config: (): Promise<EmailConfig> => jsonFetch<EmailConfig>('/api/email/config'),
   sendItSupport: (payload: ItSupportPayload): Promise<{ ok: true; messageId: string }> =>
@@ -31,5 +56,20 @@ export const EmailApi = {
     jsonFetch<{ ok: true; messageId: string }>('/api/email/test', {
       method: 'POST',
       body: JSON.stringify({ to })
+    }),
+  // Admin template CRUD
+  listTemplates: (): Promise<{ templates: EmailTemplate[]; variables: EmailTemplateVariable[] }> =>
+    jsonFetch('/api/email/templates'),
+  getTemplate: (code: string): Promise<{ template: EmailTemplate }> =>
+    jsonFetch(`/api/email/templates/${encodeURIComponent(code)}`),
+  updateTemplate: (code: string, input: { subject: string; bodyText: string; bodyHtml?: string | null; description?: string }): Promise<{ template: EmailTemplate }> =>
+    jsonFetch(`/api/email/templates/${encodeURIComponent(code)}`, {
+      method: 'PUT',
+      body: JSON.stringify(input)
+    }),
+  previewTemplate: (code: string, payload: ItSupportPreviewPayload): Promise<{ subject: string; text: string; html: string }> =>
+    jsonFetch(`/api/email/templates/${encodeURIComponent(code)}/preview`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
 };

@@ -4,12 +4,19 @@
 // host for outbound; this module just hands a message to localhost and
 // lets Postfix do the rest.
 //
+// Templates live in the `email_templates` table (seeded on first boot).
+// Subject + body are interpolated with {{variable}} tokens at send time
+// — see server/src/emailTemplates.ts for the supported variable list.
+// If a template row is missing the renderer falls back to a built-in
+// default so a missing DB row never breaks a booking save.
+//
 // Lazy-init the transporter on first use so module import never blocks
 // boot if SMTP_HOST is wrong. Connection failures are returned to the
 // caller (which logs to system_logs + audit) — the calling request
 // never fails because of email.
 
 import nodemailer, { type Transporter } from 'nodemailer';
+import { getEmailTemplate, renderTemplate, type EmailTemplate } from './emailTemplates.ts';
 
 export interface EmailMessage {
   to: string;
@@ -82,50 +89,28 @@ export async function sendMail(msg: EmailMessage): Promise<{ messageId: string }
 }
 
 /** Format and send the IT-support notification for a booking. The body
- *  includes all the detail an IT responder needs to start working the
- *  request: who, when, where, what they need, and how to reply. */
+ *  uses the editable `IT_SUPPORT` template from email_templates; falls
+ *  back to a built-in default if the row is missing or empty. */
 export async function sendItSupportEmail(b: ItSupportBooking): Promise<{ messageId: string }> {
   const cfg = smtpConfig();
-  const subject = `[IT support] ${b.ref} — ${b.date} ${b.startTime}–${b.endTime} · ${b.room}`;
-  const text = [
-    `A room booking has been flagged for IT support.`,
-    ``,
-    `Booking reference : ${b.ref}`,
-    `Date              : ${b.date}`,
-    `Time              : ${b.startTime} – ${b.endTime}`,
-    `Room              : ${b.room}`,
-    `Purpose           : ${b.purpose || '(none)'}`,
-    ``,
-    `Booker`,
-    `  Name            : ${b.booker.name}`,
-    `  Email           : ${b.booker.email}`,
-    `  Team            : ${b.booker.team}`,
-    ``,
-    `Support request`,
-    `  ${(b.supportRequests || '').split('\n').join('\n  ') || '(none — booker ticked IT support without a note)'}`,
-    ``,
-    `Reply to this email to contact the booker directly.`
-  ].join('\n');
-  const html = `<!DOCTYPE html>
-<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;line-height:1.5">
-<h2 style="margin:0 0 16px">IT support requested for a room booking</h2>
-<table style="border-collapse:collapse;margin:0 0 16px">
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Reference</td><td><strong>${esc(b.ref)}</strong></td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Date</td><td>${esc(b.date)}</td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Time</td><td>${esc(b.startTime)} – ${esc(b.endTime)}</td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Room</td><td>${esc(b.room)}</td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Purpose</td><td>${esc(b.purpose || '(none)')}</td></tr>
-</table>
-<h3 style="margin:16px 0 4px">Booker</h3>
-<table style="border-collapse:collapse;margin:0 0 16px">
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Name</td><td>${esc(b.booker.name)}</td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Email</td><td><a href="mailto:${esc(b.booker.email)}">${esc(b.booker.email)}</a></td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#64748b">Team</td><td>${esc(b.booker.team)}</td></tr>
-</table>
-<h3 style="margin:16px 0 4px">Support request</h3>
-<pre style="background:#f1f5f9;padding:12px;border-radius:6px;white-space:pre-wrap;font-family:inherit">${esc(b.supportRequests || '(none — booker ticked IT support without a note)')}</pre>
-<p style="color:#64748b;font-size:12px;margin-top:24px">Reply to this email to contact the booker directly.</p>
-</body></html>`;
+  const tmpl = await loadTemplate('IT_SUPPORT', b);
+  const subject = renderTemplate(tmpl.subject, {
+    ref: b.ref, date: b.date, startTime: b.startTime, endTime: b.endTime, room: b.room
+  });
+  const text = renderTemplate(tmpl.bodyText, {
+    ref: b.ref, date: b.date, startTime: b.startTime, endTime: b.endTime, room: b.room,
+    purpose: b.purpose || '(none)',
+    supportRequests: b.supportRequests || '(none — booker ticked IT support without a note)',
+    bookerName: b.booker.name, bookerEmail: b.booker.email, bookerTeam: b.booker.team
+  });
+  const html = tmpl.bodyHtml
+    ? renderTemplate(tmpl.bodyHtml, {
+        ref: b.ref, date: b.date, startTime: b.startTime, endTime: b.endTime, room: b.room,
+        purpose: b.purpose || '(none)',
+        supportRequests: b.supportRequests || '(none — booker ticked IT support without a note)',
+        bookerName: b.booker.name, bookerEmail: b.booker.email, bookerTeam: b.booker.team
+      })
+    : textToHtml(text);
   return sendMail({
     to: cfg.itTeamEmail,
     subject,
@@ -135,7 +120,83 @@ export async function sendItSupportEmail(b: ItSupportBooking): Promise<{ message
   });
 }
 
-function esc(s: string): string {
+/** Render the IT_SUPPORT template with a given booking. Used by the
+ *  admin preview endpoint. Returns {subject, text, html} so the admin
+ *  UI can show all three side-by-side. */
+export async function renderItSupportTemplate(b: ItSupportBooking): Promise<{ subject: string; text: string; html: string }> {
+  const tmpl = await loadTemplate('IT_SUPPORT', b);
+  const subject = renderTemplate(tmpl.subject, {
+    ref: b.ref, date: b.date, startTime: b.startTime, endTime: b.endTime, room: b.room
+  });
+  const text = renderTemplate(tmpl.bodyText, {
+    ref: b.ref, date: b.date, startTime: b.startTime, endTime: b.endTime, room: b.room,
+    purpose: b.purpose || '(none)',
+    supportRequests: b.supportRequests || '(none — booker ticked IT support without a note)',
+    bookerName: b.booker.name, bookerEmail: b.booker.email, bookerTeam: b.booker.team
+  });
+  const html = tmpl.bodyHtml
+    ? renderTemplate(tmpl.bodyHtml, {
+        ref: b.ref, date: b.date, startTime: b.startTime, endTime: b.endTime, room: b.room,
+        purpose: b.purpose || '(none)',
+        supportRequests: b.supportRequests || '(none — booker ticked IT support without a note)',
+        bookerName: b.booker.name, bookerEmail: b.booker.email, bookerTeam: b.booker.team
+      })
+    : textToHtml(text);
+  return { subject, text, html };
+}
+
+// ---------- internal helpers ----------
+
+/** Load the named template from the DB. If the row is missing or the
+ *  body is empty, return the built-in default so the caller always
+ *  has something renderable. The default matches the original hardcoded
+ *  IT-support email so deployments that pre-date the template table
+ *  still send the right thing. */
+async function loadTemplate(code: string, _b: ItSupportBooking): Promise<EmailTemplate> {
+  try {
+    const t = await getEmailTemplate(code);
+    if (t && t.bodyText && t.subject) return t;
+  } catch { /* fall through to default */ }
+  return {
+    code,
+    subject: '[IT support] {{ref}} — {{date}} {{startTime}}–{{endTime}} · {{room}}',
+    bodyText: [
+      'A room booking has been flagged for IT support.',
+      '',
+      'Booking reference : {{ref}}',
+      'Date              : {{date}}',
+      'Time              : {{startTime}} – {{endTime}}',
+      'Room              : {{room}}',
+      'Purpose           : {{purpose}}',
+      '',
+      'Booker',
+      '  Name            : {{bookerName}}',
+      '  Email           : {{bookerEmail}}',
+      '  Team            : {{bookerTeam}}',
+      '',
+      'Support request',
+      '  {{supportRequests}}',
+      '',
+      'Reply to this email to contact the booker directly.'
+    ].join('\n'),
+    bodyHtml: null,
+    description: 'Built-in default (DB template missing)',
+    updatedAt: new Date(0).toISOString()
+  };
+}
+
+/** Minimal text-to-HTML conversion: escape HTML, preserve paragraphs.
+ *  Used when an admin has only edited body_text and left body_html
+ *  blank. The output is plain but readable; admins who want fancier
+ *  formatting can fill in body_html explicitly. */
+function textToHtml(text: string): string {
+  const paragraphs = text.split(/\n{2,}/).map(p =>
+    `<p style="margin:0 0 12px;line-height:1.5">${escapeHtmlInline(p).replace(/\n/g, '<br>')}</p>`
+  );
+  return `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a">${paragraphs.join('')}</body></html>`;
+}
+
+function escapeHtmlInline(s: string): string {
   return s.replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]!));

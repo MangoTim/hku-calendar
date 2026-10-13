@@ -34,6 +34,7 @@ import { SsoFinish } from './pages/SsoFinish';
 import { AdminBackup } from './pages/AdminBackup';
 import { AdminAudit } from './pages/AdminAudit';
 import { AdminSystemLogs } from './pages/AdminSystemLogs';
+import { AdminSupport } from './pages/AdminSupport';
 import { ROLE } from './lib/app';
 
 function Placeholder({ title, body }: { title: string; body: string }) {
@@ -199,6 +200,11 @@ export default function App() {
           <Route path="/admin/backup" element={
             <RequireRole allow={() => ROLE.isAdmin()}>
               <AdminBackup />
+            </RequireRole>
+          } />
+          <Route path="/admin/support" element={
+            <RequireRole allow={() => ROLE.isAdmin()}>
+              <AdminSupport />
             </RequireRole>
           } />
 

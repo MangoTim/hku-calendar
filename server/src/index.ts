@@ -831,6 +831,108 @@ app.post('/api/email/test', async (req, res) => {
   }
 });
 
+// ----- Email templates (admin-editable) -----
+// /admin/email CRUDs these. PUT replaces subject + body; description is
+// optional (used as the editor placeholder). The /preview endpoint renders
+// the template with sample data so the admin can see the result without
+// saving. Rendering is non-destructive — the DB row is not touched.
+
+import {
+  listEmailTemplates,
+  getEmailTemplate,
+  updateEmailTemplate,
+  TEMPLATE_VARIABLES
+} from './emailTemplates.ts';
+import { renderItSupportTemplate, type ItSupportBooking } from './email.ts';
+
+app.get('/api/email/templates', requireAdmin, async (_req, res) => {
+  try {
+    const list = await listEmailTemplates();
+    res.json({ templates: list, variables: TEMPLATE_VARIABLES });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.get('/api/email/templates/:code', requireAdmin, async (req, res) => {
+  try {
+    const t = await getEmailTemplate(String(req.params.code));
+    if (!t) return res.status(404).json({ error: 'template not found' });
+    res.json({ template: t });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.put('/api/email/templates/:code', requireAdmin, async (req, res) => {
+  const b = req.body ?? {};
+  const subject = String(b.subject || '').trim();
+  const bodyText = String(b.bodyText || '');
+  const bodyHtml = b.bodyHtml == null ? null : String(b.bodyHtml);
+  const description = b.description == null ? undefined : String(b.description);
+  if (!subject) return res.status(400).json({ error: 'subject is required' });
+  if (!bodyText) return res.status(400).json({ error: 'bodyText is required' });
+  try {
+    const t = await updateEmailTemplate(
+      String(req.params.code),
+      { subject, bodyText, bodyHtml, description },
+      (req as any).adminUserId
+    );
+    if (!t) return res.status(404).json({ error: 'template not found' });
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: 'EMAIL_TEMPLATE_UPDATE',
+      resourceType: 'email_template',
+      resourceId: t.code,
+      summary: `updated email template ${t.code} (subject="${t.subject.slice(0, 80)}", bodyTextLength=${t.bodyText.length}, bodyHtmlLength=${t.bodyHtml?.length ?? 0})`,
+      ipAddress: clientIp(req)
+    });
+    res.json({ template: t });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/** Render-only endpoint. Used by the admin preview pane. Body mirrors the
+ *  IT-support payload (itSupport bookings are the only consumer today, so
+ *  this is purpose-built — extending to other template types just means
+ *  switching on req.params.code). */
+app.post('/api/email/templates/:code/preview', requireAdmin, async (req, res) => {
+  const code = req.params.code;
+  if (code !== 'IT_SUPPORT') return res.status(400).json({ error: `preview not implemented for template '${code}'` });
+  const b = req.body ?? {};
+  const booking: ItSupportBooking = {
+    ref: String(b.ref || 'RB-0000'),
+    date: String(b.date || new Date().toISOString().slice(0, 10)),
+    startTime: String(b.startTime || '10:00'),
+    endTime: String(b.endTime || '11:00'),
+    room: String(b.room || 'Meeting Room 1'),
+    purpose: String(b.purpose || 'Sample purpose'),
+    supportRequests: String(b.supportRequests || ''),
+    booker: {
+      name: String(b.booker?.name || 'Sample Booker'),
+      email: String(b.booker?.email || 'sample.booker@example.com'),
+      team: String(b.booker?.team || 'SSO')
+    }
+  };
+  try {
+    const r = await renderItSupportTemplate(booking);
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: 'EMAIL_TEMPLATE_RENDER',
+      resourceType: 'email_template',
+      resourceId: code,
+      summary: `previewed ${code} template (ref=${booking.ref})`,
+      ipAddress: clientIp(req)
+    });
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
 // ----- DB inspector (read-only) -----
 // Demo: no auth at the API layer. The frontend gates /admin/database on
 // ROLE.isAdmin() via <RequireRole>. Production would enforce ADMIN from a

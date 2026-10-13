@@ -141,6 +141,23 @@ async function ensureSchema(): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sso_users_email_lower ON sso_users (lower(email));
     CREATE INDEX IF NOT EXISTS idx_sso_users_role ON sso_users (role);
 
+    -- Admin-editable email templates. One row per template (PRIMARY KEY on
+    -- the 'code' column). Seeded from code on first boot so the IT-support
+    -- email has something to render before any admin opens the UI. body_text
+    -- is the source of truth; body_html is optional and used as-is when
+    -- present, otherwise the server auto-generates HTML from body_text (with
+    -- line breaks preserved). Variables use {{name}} and are substituted at
+    -- send time. See server/src/email.ts for the supported list.
+    CREATE TABLE IF NOT EXISTS email_templates (
+      code          TEXT PRIMARY KEY,
+      subject       TEXT NOT NULL,
+      body_text     TEXT NOT NULL,
+      body_html     TEXT,
+      description   TEXT NOT NULL DEFAULT '',
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by    INTEGER
+    );
+
     -- Id-rebase: keep sso_users.id out of the seed USERS range (1-21) so
     -- the FE's findById lookup can never collide with a seed row by
     -- accident. Idempotent: no-op once every row sits at id >= 10000.
@@ -282,6 +299,45 @@ async function seedIfEmpty(): Promise<void> {
       console.log(`[db] SSO_SEED_ADMIN_EMAIL ${seedEmail} already exists — skipping seed`);
     }
   }
+
+  // Seed the IT-support email template on first boot so /api/email/it-support
+  // has a renderable template even before any admin opens /admin/email.
+  // Idempotent — the ON CONFLICT DO UPDATE only overwrites empty body_text
+  // (i.e., a row was created but never filled in) and never stomps admin edits
+  // made through the UI.
+  await pool!.query(
+    `INSERT INTO email_templates (code, subject, body_text, description)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (code) DO UPDATE
+       SET subject     = COALESCE(NULLIF(email_templates.subject, ''), EXCLUDED.subject),
+           body_text   = COALESCE(NULLIF(email_templates.body_text, ''), EXCLUDED.body_text),
+           description = COALESCE(NULLIF(email_templates.description, ''), EXCLUDED.description),
+           updated_at  = NOW()`,
+    [
+      'IT_SUPPORT',
+      '[IT support] {{ref}} — {{date}} {{startTime}}–{{endTime}} · {{room}}',
+      [
+        'A room booking has been flagged for IT support.',
+        '',
+        'Booking reference : {{ref}}',
+        'Date              : {{date}}',
+        'Time              : {{startTime}} – {{endTime}}',
+        'Room              : {{room}}',
+        'Purpose           : {{purpose}}',
+        '',
+        'Booker',
+        '  Name            : {{bookerName}}',
+        '  Email           : {{bookerEmail}}',
+        '  Team            : {{bookerTeam}}',
+        '',
+        'Support request',
+        '  {{supportRequests}}',
+        '',
+        'Reply to this email to contact the booker directly.'
+      ].join('\n'),
+      'Sent to the IT team address when a booking is saved with "Request IT support" ticked. Variables in {{double braces}} are substituted at send time.'
+    ]
+  );
 }
 
 export async function initDb(): Promise<void> {
