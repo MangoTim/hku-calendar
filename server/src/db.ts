@@ -147,6 +147,16 @@ async function ensureSchema(): Promise<void> {
     -- 10000). Email is still the single source of truth for sign-in
     -- (the sso_session cookie carries email, not id) so existing
     -- cookies keep working through the migration.
+    --
+    -- Defensive against the on-.105 case where the sso_users table
+    -- was created originally without a SERIAL sequence (column was
+    -- INTEGER), or where the sequence was dropped afterwards:
+    --   1. If the column has a serial sequence and it exists, setval
+    --      it to MAX(id)+1.
+    --   2. If pg_get_serial_sequence returns a name but the relation
+    --      is gone (42P01 undefined_table), create it and bind it.
+    --   3. If pg_get_serial_sequence returns NULL (no default on the
+    --      column), create sso_users_id_seq from scratch and bind.
     DO $$
     DECLARE
       colliding_count INTEGER;
@@ -154,13 +164,33 @@ async function ensureSchema(): Promise<void> {
       seq_name        TEXT;
     BEGIN
       SELECT COUNT(*) INTO colliding_count FROM sso_users WHERE id < 10000;
-      IF colliding_count > 0 THEN
-        UPDATE sso_users SET id = id + 10000 WHERE id < 10000;
-        SELECT COALESCE(MAX(id), 10000) + 1 INTO next_id FROM sso_users;
-        seq_name := pg_get_serial_sequence('sso_users', 'id');
-        EXECUTE format('ALTER SEQUENCE %I RESTART WITH %s', seq_name, next_id);
-        RAISE NOTICE '[db] sso_users: rebased % row(s) past collision range (next id = %)', colliding_count, next_id;
+      IF colliding_count = 0 THEN
+        RETURN;
       END IF;
+      UPDATE sso_users SET id = id + 10000 WHERE id < 10000;
+      SELECT COALESCE(MAX(id), 10000) + 1 INTO next_id FROM sso_users;
+      seq_name := pg_get_serial_sequence('sso_users', 'id');
+      IF seq_name IS NULL THEN
+        -- No default on the id column at all — create the sequence
+        -- and bind it so future INSERTs (no explicit id) get fresh
+        -- ids from the sso_users_id_seq counter.
+        EXECUTE format('CREATE SEQUENCE sso_users_id_seq START WITH %s OWNED BY sso_users.id', next_id);
+        EXECUTE 'ALTER TABLE sso_users ALTER COLUMN id SET DEFAULT nextval(''sso_users_id_seq''::regclass)';
+        RAISE NOTICE '[db] sso_users: created new sso_users_id_seq starting at %', next_id;
+      ELSE
+        -- pg_get_serial_sequence can return a name even after the
+        -- sequence was dropped (the column's default expression
+        -- still references it). setval() raises 42P01 in that case;
+        -- catch and recreate.
+        BEGIN
+          PERFORM setval(seq_name, next_id, false);
+        EXCEPTION WHEN undefined_table THEN
+          EXECUTE format('CREATE SEQUENCE %I START WITH %s OWNED BY sso_users.id', seq_name, next_id);
+          EXECUTE format('ALTER TABLE sso_users ALTER COLUMN id SET DEFAULT nextval(%L::regclass)', seq_name);
+          RAISE NOTICE '[db] sso_users: recreated missing sequence % starting at %', seq_name, next_id;
+        END;
+      END IF;
+      RAISE NOTICE '[db] sso_users: rebased % row(s) past collision range (next id = %)', colliding_count, next_id;
     END $$;
   `);
   console.log('[db] schema ensured');
