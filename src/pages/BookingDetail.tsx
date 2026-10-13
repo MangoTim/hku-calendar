@@ -32,8 +32,16 @@ export function BookingDetail() {
   }
 
   const room = ROOMS.find(r => r.id === b.roomId);
-  const { findById } = useUsers();
+  const { findById, users } = useUsers();
   const booker = findById(b.bookedById);
+  // Diagnostic: how many rows in the merged users list have the same id as
+  // this booking's bookedById? If ssoUsers is empty, only the seed row
+  // matches and we lose the SSO identity on collision.
+  const allMatches = users.filter(u => u.id === b.bookedById);
+  if (typeof window !== 'undefined') {
+    // eslint-disable-next-line no-console
+    console.info('[BookingDetail] bookedById=', b.bookedById, 'matches=', allMatches.map(u => `${u.id}:${u.displayName}:${u.source}`));
+  }
   const canEdit = user!.id === b.bookedById || ROLE.isAdmin();
   const canCancel = canEdit && b.status !== 'CANCELLED';
 
