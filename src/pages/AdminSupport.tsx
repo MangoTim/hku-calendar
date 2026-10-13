@@ -5,7 +5,7 @@
 // admin can verify the {{tokens}} resolve and that the layout looks right
 // before saving. Falls back to the built-in default if the row is empty
 // (handled server-side — see server/src/email.ts).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { EmailApi } from '../lib/api/email';
@@ -50,6 +50,15 @@ export function AdminSupport() {
   const [savingEmail, setSavingEmail] = useState(false);
   const [emailDirty, setEmailDirty] = useState(false);
   const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
+
+  // Variable insertion — track which editor field the Insert button targets.
+  // Defaults to bodyText; auto-updates when the user focuses a different
+  // editor. Refs let Insert restore the cursor position after React re-renders.
+  type FieldKey = 'subject' | 'bodyText' | 'bodyHtml';
+  const [activeField, setActiveField] = useState<FieldKey>('bodyText');
+  const subjectRef = useRef<HTMLInputElement>(null);
+  const bodyTextRef = useRef<HTMLTextAreaElement>(null);
+  const bodyHtmlRef = useRef<HTMLTextAreaElement>(null);
 
   // Load templates + variable reference once.
   useEffect(() => {
@@ -196,6 +205,44 @@ export function AdminSupport() {
     setPreview(null);
   };
 
+  // Insert `{{token}}` at the saved cursor position of the chosen field.
+  // Falls back to appending when no cursor info is available (e.g. the
+  // user clicked Insert without ever focusing the field).
+  const insertToken = (field: FieldKey, name: string) => {
+    const token = `{{${name}}}`;
+    if (field === 'subject') {
+      const el = subjectRef.current;
+      const start = el?.selectionStart ?? subject.length;
+      const end = el?.selectionEnd ?? start;
+      const next = subject.slice(0, start) + token + subject.slice(end);
+      setSubject(next);
+      requestAnimationFrame(() => {
+        el?.focus();
+        el?.setSelectionRange(start + token.length, start + token.length);
+      });
+    } else if (field === 'bodyText') {
+      const el = bodyTextRef.current;
+      const start = el?.selectionStart ?? bodyText.length;
+      const end = el?.selectionEnd ?? start;
+      const next = bodyText.slice(0, start) + token + bodyText.slice(end);
+      setBodyText(next);
+      requestAnimationFrame(() => {
+        el?.focus();
+        el?.setSelectionRange(start + token.length, start + token.length);
+      });
+    } else {
+      const el = bodyHtmlRef.current;
+      const start = el?.selectionStart ?? bodyHtml.length;
+      const end = el?.selectionEnd ?? start;
+      const next = bodyHtml.slice(0, start) + token + bodyHtml.slice(end);
+      setBodyHtml(next);
+      requestAnimationFrame(() => {
+        el?.focus();
+        el?.setSelectionRange(start + token.length, start + token.length);
+      });
+    }
+  };
+
   return (
     <AppShell title="IT support">
       <div className="page-header">
@@ -315,10 +362,12 @@ export function AdminSupport() {
             <label className="form__label" htmlFor="tplSubject">Subject</label>
             <input
               id="tplSubject"
+              ref={subjectRef}
               className="form__input"
               type="text"
               value={subject}
               onChange={e => setSubject(e.target.value)}
+              onFocus={() => setActiveField('subject')}
               maxLength={200}
               placeholder="[IT support] {{ref}} — {{date}} {{startTime}}–{{endTime}} · {{room}}"
               required
@@ -332,9 +381,11 @@ export function AdminSupport() {
             <label className="form__label" htmlFor="tplBodyText">Body (plain text, required)</label>
             <textarea
               id="tplBodyText"
+              ref={bodyTextRef}
               className="form__textarea"
               value={bodyText}
               onChange={e => setBodyText(e.target.value)}
+              onFocus={() => setActiveField('bodyText')}
               rows={14}
               spellCheck={false}
               required
@@ -356,9 +407,11 @@ export function AdminSupport() {
             </label>
             {useHtml && (
               <textarea
+                ref={bodyHtmlRef}
                 className="form__textarea"
                 value={bodyHtml}
                 onChange={e => setBodyHtml(e.target.value)}
+                onFocus={() => setActiveField('bodyHtml')}
                 rows={10}
                 placeholder="<!DOCTYPE html><html><body>…</body></html>"
                 spellCheck={false}
@@ -406,20 +459,114 @@ export function AdminSupport() {
         </form>
       )}
 
-      {/* ---- Variable reference ---- */}
+      {/* ---- Variable reference + click-to-insert ---- */}
       {variables.length > 0 && (
         <section className="card" style={{ marginTop: 'var(--space-3)' }}>
-          <h2 style={{ marginTop: 0 }}>Available variables</h2>
-          <p className="text-muted text-sm">
-            Use these <code>&#123;&#123;tokens&#125;&#125;</code> in the subject or body. They are filled in automatically when the email is sent.
-          </p>
+          <div className="page-header" style={{ marginBottom: 'var(--space-3)' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Available variables</h2>
+              <div className="text-muted text-sm" style={{ marginTop: 4 }}>
+                Use these <code>&#123;&#123;tokens&#125;&#125;</code> in the subject or body. They are filled in
+                automatically when the email is sent. Click <strong>Insert</strong> to drop the token at your
+                cursor.
+              </div>
+            </div>
+          </div>
+
+          {/* ---- Currently saved template reference ---- */}
+          {active && (
+            <details style={{ marginBottom: 'var(--space-3)' }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                Currently saved template (live in production)
+              </summary>
+              <div className="card" style={{ marginTop: 'var(--space-2)', padding: 'var(--space-3)', background: 'var(--bg-soft)' }}>
+                <div className="form__row">
+                  <label className="form__label">Subject</label>
+                  <div className="form__input" style={{
+                    background: '#fff',
+                    fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
+                    fontSize: 13
+                  }}>
+                    {escapeHtml(active.subject)}
+                  </div>
+                </div>
+                <div className="form__row">
+                  <label className="form__label">Body (plain text)</label>
+                  <pre style={{
+                      background: '#fff',
+                      padding: 'var(--space-2)',
+                      borderRadius: 6,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      maxHeight: 240,
+                      overflow: 'auto',
+                      margin: 0,
+                      fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
+                      fontSize: 12
+                    }}>
+                      {active.bodyText}
+                    </pre>
+                </div>
+                {active.bodyHtml && (
+                  <div className="form__row">
+                    <label className="form__label">Body (HTML)</label>
+                    <pre style={{
+                        background: '#fff',
+                        padding: 'var(--space-2)',
+                        borderRadius: 6,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        maxHeight: 200,
+                        overflow: 'auto',
+                        margin: 0,
+                        fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
+                        fontSize: 12
+                      }}>
+                        {active.bodyHtml}
+                      </pre>
+                  </div>
+                )}
+                <div className="text-muted text-sm" style={{ marginTop: 6 }}>
+                  Saved {fmt.dateTime(active.updatedAt)}. Edits above don't reach production until you click <strong>Save template</strong>.
+                </div>
+              </div>
+            </details>
+          )}
+
+          {/* ---- Insert target picker ---- */}
+          <div className="toolbar" style={{ marginBottom: 'var(--space-2)', flexWrap: 'wrap' }}>
+            <span className="form__label" style={{ margin: 0 }}>Insert into:</span>
+            <div className="seg">
+              {(['subject', 'bodyText', 'bodyHtml'] as FieldKey[]).map(f => {
+                const label = f === 'subject' ? 'Subject' : f === 'bodyText' ? 'Body text' : 'HTML body';
+                const enabled = f === 'bodyHtml' ? useHtml : true;
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    className={`btn btn--sm ${activeField === f ? 'is-active' : ''}`}
+                    onClick={() => setActiveField(f)}
+                    disabled={!enabled}
+                    title={enabled ? '' : 'Enable the HTML body above first'}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="toolbar__sep" />
+            <span className="text-muted text-sm">
+              Click <strong>Insert</strong> to place the token at your cursor in the selected field.
+            </span>
+          </div>
+
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
                   <th style={{ width: 220 }}>Token</th>
                   <th>Description</th>
-                  <th style={{ width: 140 }}></th>
+                  <th style={{ width: 130 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -428,16 +575,24 @@ export function AdminSupport() {
                     <td><code>&#123;&#123;{escapeHtml(v.name)}&#125;&#125;</code></td>
                     <td className="text-sm text-muted">{escapeHtml(v.description)}</td>
                     <td>
-                      <button
-                        type="button"
-                        className="btn btn--ghost btn--sm"
-                        onClick={() => {
-                          navigator.clipboard?.writeText(`{{${v.name}}}`);
-                        }}
-                        title="Copy token"
-                      >
-                        Copy
-                      </button>
+                      <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="btn btn--ghost btn--sm"
+                          onClick={() => navigator.clipboard?.writeText(`{{${v.name}}}`)}
+                          title="Copy to clipboard"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn--primary btn--sm"
+                          onClick={() => insertToken(activeField, v.name)}
+                          title={`Insert at ${activeField === 'subject' ? 'subject' : activeField === 'bodyText' ? 'body text' : 'HTML body'}`}
+                        >
+                          + Insert
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
