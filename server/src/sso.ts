@@ -25,10 +25,10 @@ import type { Express, Request } from 'express';
 import * as jose from 'jose';
 import { getSsoConfig, type SsoDbConfig } from './ssoConfig.ts';
 import { recordSsoOidByEmail } from './ssoUsers.ts';
+import { COOKIE_SECRET } from './cookieSecret.ts';
 
 const REDIRECT_URI  = process.env.SSO_REDIRECT_URI;
 const POST_LOGIN    = process.env.SSO_POST_LOGIN_REDIRECT || '/dashboard';
-const COOKIE_SECRET = process.env.SSO_COOKIE_SECRET || 'dev-only-not-secure-change-me';
 
 /** Lazy-cached effective SSO config. Cleared on /api/sso/config PUT so
  *  admin edits take effect without restarting the API. */
@@ -168,12 +168,11 @@ export function initSso(app: Express): void {
     // tamper-resistance (not for confidentiality — name/email aren't
     // sensitive in this demo).
     const sessionPayload = { oid, name, email, iat: Math.floor(Date.now() / 1000) };
-    const sessionSecret = new TextEncoder().encode(COOKIE_SECRET);
     const sessionJwt = await new jose.SignJWT(sessionPayload)
       .setProtectedHeader({ alg: 'HS256' })
       .setIssuedAt()
       .setExpirationTime('8h')
-      .sign(sessionSecret);
+      .sign(COOKIE_SECRET);
     setCookie(res, 'sso_session', sessionJwt, {
       httpOnly: true,
       sameSite: 'lax',
@@ -205,8 +204,7 @@ export function initSso(app: Express): void {
       return;
     }
     try {
-      const sessionSecret = new TextEncoder().encode(COOKIE_SECRET);
-      const { payload } = await jose.jwtVerify(token, sessionSecret, {
+      const { payload } = await jose.jwtVerify(token, COOKIE_SECRET, {
         algorithms: ['HS256']
       });
       res.json({

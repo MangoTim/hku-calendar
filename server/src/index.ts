@@ -29,6 +29,11 @@ import {
 } from './introspect.ts';
 import { initSso } from './sso.ts';
 import { getSsoConfig, saveSsoConfig, testSsoConnection } from './ssoConfig.ts';
+// Shared secret for sso_session and local_admin cookies. Lives in its own
+// module so the default literal is the same in both the signer (sso.ts)
+// and the verifier (index.ts) — otherwise an SSO-signed-in admin can
+// call /api/auth/session but not /api/sso/users.
+import { COOKIE_SECRET } from './cookieSecret.ts';
 import {
   listSsoUsers,
   findSsoUserByEmail,
@@ -123,13 +128,6 @@ app.post('/api/sso/test', async (_req, res) => {
 // read endpoint used by the FE bridge to map an Azure ID-token email to a
 // local account. The admin gate verifies the sso_session cookie matches an
 // enabled sso_users row with role='ADMIN' — same shape as the FE bootstrap.
-
-// Shared secret for the sso_session cookie. Mirror of sso.ts (kept private
-// to that module otherwise). Falling back to a stable demo default keeps
-// dev/test setups working; production sets SSO_COOKIE_SECRET via env.
-const COOKIE_SECRET = new TextEncoder().encode(
-  process.env.SSO_COOKIE_SECRET || 'demo-sso-cookie-secret-change-me'
-);
 
 async function readSsoSessionToken(req: express.Request): Promise<string | null> {
   const cookieHeader = req.headers.cookie || '';
