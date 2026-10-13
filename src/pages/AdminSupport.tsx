@@ -5,7 +5,7 @@
 // admin can verify the {{tokens}} resolve and that the layout looks right
 // before saving. Falls back to the built-in default if the row is empty
 // (handled server-side — see server/src/email.ts).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { EmailApi } from '../lib/api/email';
@@ -51,14 +51,12 @@ export function AdminSupport() {
   const [emailDirty, setEmailDirty] = useState(false);
   const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
 
-  // Variable insertion — track which editor field the Insert button targets.
-  // Defaults to bodyText; auto-updates when the user focuses a different
-  // editor. Refs let Insert restore the cursor position after React re-renders.
-  type FieldKey = 'subject' | 'bodyText' | 'bodyHtml';
-  const [activeField, setActiveField] = useState<FieldKey>('bodyText');
-  const subjectRef = useRef<HTMLInputElement>(null);
-  const bodyTextRef = useRef<HTMLTextAreaElement>(null);
-  const bodyHtmlRef = useRef<HTMLTextAreaElement>(null);
+  // Editable sample booking — admin can tweak the values used by the
+  // Preview button to see how the template renders in different cases
+  // (e.g. change "Grace Ng" → "Alex Chan", or room to "Room 12"). Defaults
+  // match the original hardcoded SAMPLE_BOOKING so the first preview looks
+  // familiar; user edits live in component state only — never persisted.
+  const [sample, setSample] = useState<ItSupportPreviewPayload>(SAMPLE_BOOKING);
 
   // Load templates + variable reference once.
   useEffect(() => {
@@ -185,7 +183,7 @@ export function AdminSupport() {
     setPreviewing(true);
     setError(null);
     try {
-      const r = await EmailApi.previewTemplate(active.code, SAMPLE_BOOKING);
+      const r = await EmailApi.previewTemplate(active.code, sample);
       setPreview(r);
     } catch (e: any) {
       setError(e?.message || 'Preview failed.');
@@ -205,42 +203,10 @@ export function AdminSupport() {
     setPreview(null);
   };
 
-  // Insert `{{token}}` at the saved cursor position of the chosen field.
-  // Falls back to appending when no cursor info is available (e.g. the
-  // user clicked Insert without ever focusing the field).
-  const insertToken = (field: FieldKey, name: string) => {
-    const token = `{{${name}}}`;
-    if (field === 'subject') {
-      const el = subjectRef.current;
-      const start = el?.selectionStart ?? subject.length;
-      const end = el?.selectionEnd ?? start;
-      const next = subject.slice(0, start) + token + subject.slice(end);
-      setSubject(next);
-      requestAnimationFrame(() => {
-        el?.focus();
-        el?.setSelectionRange(start + token.length, start + token.length);
-      });
-    } else if (field === 'bodyText') {
-      const el = bodyTextRef.current;
-      const start = el?.selectionStart ?? bodyText.length;
-      const end = el?.selectionEnd ?? start;
-      const next = bodyText.slice(0, start) + token + bodyText.slice(end);
-      setBodyText(next);
-      requestAnimationFrame(() => {
-        el?.focus();
-        el?.setSelectionRange(start + token.length, start + token.length);
-      });
-    } else {
-      const el = bodyHtmlRef.current;
-      const start = el?.selectionStart ?? bodyHtml.length;
-      const end = el?.selectionEnd ?? start;
-      const next = bodyHtml.slice(0, start) + token + bodyHtml.slice(end);
-      setBodyHtml(next);
-      requestAnimationFrame(() => {
-        el?.focus();
-        el?.setSelectionRange(start + token.length, start + token.length);
-      });
-    }
+  // Reset the editable sample booking back to the built-in defaults.
+  const onResetSample = () => {
+    if (!confirm('Reset the sample booking fields back to the defaults?')) return;
+    setSample(SAMPLE_BOOKING);
   };
 
   return (
@@ -362,12 +328,10 @@ export function AdminSupport() {
             <label className="form__label" htmlFor="tplSubject">Subject</label>
             <input
               id="tplSubject"
-              ref={subjectRef}
               className="form__input"
               type="text"
               value={subject}
               onChange={e => setSubject(e.target.value)}
-              onFocus={() => setActiveField('subject')}
               maxLength={200}
               placeholder="[IT support] {{ref}} — {{date}} {{startTime}}–{{endTime}} · {{room}}"
               required
@@ -381,11 +345,9 @@ export function AdminSupport() {
             <label className="form__label" htmlFor="tplBodyText">Body (plain text, required)</label>
             <textarea
               id="tplBodyText"
-              ref={bodyTextRef}
               className="form__textarea"
               value={bodyText}
               onChange={e => setBodyText(e.target.value)}
-              onFocus={() => setActiveField('bodyText')}
               rows={14}
               spellCheck={false}
               required
@@ -407,11 +369,9 @@ export function AdminSupport() {
             </label>
             {useHtml && (
               <textarea
-                ref={bodyHtmlRef}
                 className="form__textarea"
                 value={bodyHtml}
                 onChange={e => setBodyHtml(e.target.value)}
-                onFocus={() => setActiveField('bodyHtml')}
                 rows={10}
                 placeholder="<!DOCTYPE html><html><body>…</body></html>"
                 spellCheck={false}
@@ -441,14 +401,6 @@ export function AdminSupport() {
               Discard changes
             </button>
             <button
-              type="button"
-              className="btn"
-              onClick={onPreview}
-              disabled={previewing || saving}
-            >
-              {previewing ? 'Rendering…' : '👁 Preview with sample booking'}
-            </button>
-            <button
               type="submit"
               className="btn btn--primary"
               disabled={saving || !dirty || !subject.trim() || !bodyText.trim()}
@@ -459,114 +411,169 @@ export function AdminSupport() {
         </form>
       )}
 
-      {/* ---- Variable reference + click-to-insert ---- */}
+      {/* ---- Sample booking (editable preview data) ---- */}
+      <section className="card" style={{ marginTop: 'var(--space-3)' }}>
+        <div className="page-header" style={{ marginBottom: 'var(--space-3)' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Sample booking</h2>
+            <div className="text-muted text-sm" style={{ marginTop: 4 }}>
+              These values are used by the <strong>Preview</strong> button to render the template. Edit them
+              to test different cases (e.g. change the room, the booker, or a long support note). They live in
+              your browser only — nothing here is saved.
+            </div>
+          </div>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onResetSample}>
+            Reset to defaults
+          </button>
+        </div>
+
+        <form className="form form--2col" onSubmit={e => { e.preventDefault(); onPreview(); }} noValidate>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleRef">Booking ref</label>
+            <input
+              id="sampleRef"
+              className="form__input"
+              type="text"
+              value={sample.ref}
+              onChange={e => setSample(s => ({ ...s, ref: e.target.value }))}
+              maxLength={32}
+              placeholder="RB-0042"
+            />
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleRoom">Room</label>
+            <input
+              id="sampleRoom"
+              className="form__input"
+              type="text"
+              value={sample.room}
+              onChange={e => setSample(s => ({ ...s, room: e.target.value }))}
+              maxLength={80}
+              placeholder="Conference Room A"
+            />
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleDate">Date</label>
+            <input
+              id="sampleDate"
+              className="form__input"
+              type="text"
+              value={sample.date}
+              onChange={e => setSample(s => ({ ...s, date: e.target.value }))}
+              maxLength={40}
+              placeholder="Thu, 15 Oct 2026"
+            />
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleTimes">Time</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                id="sampleTimes"
+                className="form__input"
+                type="text"
+                value={sample.startTime}
+                onChange={e => setSample(s => ({ ...s, startTime: e.target.value }))}
+                maxLength={8}
+                placeholder="14:00"
+                style={{ maxWidth: 110 }}
+              />
+              <span style={{ alignSelf: 'center', color: 'var(--text-muted)' }}>–</span>
+              <input
+                aria-label="End time"
+                className="form__input"
+                type="text"
+                value={sample.endTime}
+                onChange={e => setSample(s => ({ ...s, endTime: e.target.value }))}
+                maxLength={8}
+                placeholder="15:30"
+                style={{ maxWidth: 110 }}
+              />
+            </div>
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="samplePurpose">Purpose</label>
+            <input
+              id="samplePurpose"
+              className="form__input"
+              type="text"
+              value={sample.purpose}
+              onChange={e => setSample(s => ({ ...s, purpose: e.target.value }))}
+              maxLength={120}
+              placeholder="Quarterly review with external vendor"
+            />
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleSupport">Support request</label>
+            <input
+              id="sampleSupport"
+              className="form__input"
+              type="text"
+              value={sample.supportRequests}
+              onChange={e => setSample(s => ({ ...s, supportRequests: e.target.value }))}
+              maxLength={240}
+              placeholder="Projector + speakerphone please; remote join via Teams."
+            />
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleBookerName">Booker name</label>
+            <input
+              id="sampleBookerName"
+              className="form__input"
+              type="text"
+              value={sample.booker.name}
+              onChange={e => setSample(s => ({ ...s, booker: { ...s.booker, name: e.target.value } }))}
+              maxLength={80}
+              placeholder="Grace Ng"
+            />
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleBookerEmail">Booker email</label>
+            <input
+              id="sampleBookerEmail"
+              className="form__input"
+              type="email"
+              value={sample.booker.email}
+              onChange={e => setSample(s => ({ ...s, booker: { ...s.booker, email: e.target.value } }))}
+              maxLength={120}
+              placeholder="grace.ng@example.com"
+              autoComplete="off"
+            />
+          </div>
+          <div className="form__row">
+            <label className="form__label" htmlFor="sampleBookerTeam">Booker team</label>
+            <input
+              id="sampleBookerTeam"
+              className="form__input"
+              type="text"
+              value={sample.booker.team}
+              onChange={e => setSample(s => ({ ...s, booker: { ...s.booker, team: e.target.value } }))}
+              maxLength={80}
+              placeholder="Systems"
+            />
+          </div>
+          <div className="form__actions form__row--full">
+            <button type="submit" className="btn btn--primary" disabled={previewing || saving}>
+              {previewing ? 'Rendering…' : '👁 Render preview with these values'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {/* ---- Variable reference ---- */}
       {variables.length > 0 && (
         <section className="card" style={{ marginTop: 'var(--space-3)' }}>
-          <div className="page-header" style={{ marginBottom: 'var(--space-3)' }}>
-            <div>
-              <h2 style={{ margin: 0 }}>Available variables</h2>
-              <div className="text-muted text-sm" style={{ marginTop: 4 }}>
-                Use these <code>&#123;&#123;tokens&#125;&#125;</code> in the subject or body. They are filled in
-                automatically when the email is sent. Click <strong>Insert</strong> to drop the token at your
-                cursor.
-              </div>
-            </div>
-          </div>
-
-          {/* ---- Currently saved template reference ---- */}
-          {active && (
-            <details style={{ marginBottom: 'var(--space-3)' }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
-                Currently saved template (live in production)
-              </summary>
-              <div className="card" style={{ marginTop: 'var(--space-2)', padding: 'var(--space-3)', background: 'var(--bg-soft)' }}>
-                <div className="form__row">
-                  <label className="form__label">Subject</label>
-                  <div className="form__input" style={{
-                    background: '#fff',
-                    fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
-                    fontSize: 13
-                  }}>
-                    {escapeHtml(active.subject)}
-                  </div>
-                </div>
-                <div className="form__row">
-                  <label className="form__label">Body (plain text)</label>
-                  <pre style={{
-                      background: '#fff',
-                      padding: 'var(--space-2)',
-                      borderRadius: 6,
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      maxHeight: 240,
-                      overflow: 'auto',
-                      margin: 0,
-                      fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
-                      fontSize: 12
-                    }}>
-                      {active.bodyText}
-                    </pre>
-                </div>
-                {active.bodyHtml && (
-                  <div className="form__row">
-                    <label className="form__label">Body (HTML)</label>
-                    <pre style={{
-                        background: '#fff',
-                        padding: 'var(--space-2)',
-                        borderRadius: 6,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        maxHeight: 200,
-                        overflow: 'auto',
-                        margin: 0,
-                        fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
-                        fontSize: 12
-                      }}>
-                        {active.bodyHtml}
-                      </pre>
-                  </div>
-                )}
-                <div className="text-muted text-sm" style={{ marginTop: 6 }}>
-                  Saved {fmt.dateTime(active.updatedAt)}. Edits above don't reach production until you click <strong>Save template</strong>.
-                </div>
-              </div>
-            </details>
-          )}
-
-          {/* ---- Insert target picker ---- */}
-          <div className="toolbar" style={{ marginBottom: 'var(--space-2)', flexWrap: 'wrap' }}>
-            <span className="form__label" style={{ margin: 0 }}>Insert into:</span>
-            <div className="seg">
-              {(['subject', 'bodyText', 'bodyHtml'] as FieldKey[]).map(f => {
-                const label = f === 'subject' ? 'Subject' : f === 'bodyText' ? 'Body text' : 'HTML body';
-                const enabled = f === 'bodyHtml' ? useHtml : true;
-                return (
-                  <button
-                    key={f}
-                    type="button"
-                    className={`btn btn--sm ${activeField === f ? 'is-active' : ''}`}
-                    onClick={() => setActiveField(f)}
-                    disabled={!enabled}
-                    title={enabled ? '' : 'Enable the HTML body above first'}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="toolbar__sep" />
-            <span className="text-muted text-sm">
-              Click <strong>Insert</strong> to place the token at your cursor in the selected field.
-            </span>
-          </div>
-
+          <h2 style={{ marginTop: 0 }}>Available variables</h2>
+          <p className="text-muted text-sm">
+            Use these <code>&#123;&#123;tokens&#125;&#125;</code> in the subject or body. They are filled in
+            automatically when the email is sent. Click <strong>Copy</strong> to grab a token.
+          </p>
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
                   <th style={{ width: 220 }}>Token</th>
                   <th>Description</th>
-                  <th style={{ width: 130 }}></th>
+                  <th style={{ width: 140 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -575,24 +582,14 @@ export function AdminSupport() {
                     <td><code>&#123;&#123;{escapeHtml(v.name)}&#125;&#125;</code></td>
                     <td className="text-sm text-muted">{escapeHtml(v.description)}</td>
                     <td>
-                      <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          className="btn btn--ghost btn--sm"
-                          onClick={() => navigator.clipboard?.writeText(`{{${v.name}}}`)}
-                          title="Copy to clipboard"
-                        >
-                          Copy
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn--primary btn--sm"
-                          onClick={() => insertToken(activeField, v.name)}
-                          title={`Insert at ${activeField === 'subject' ? 'subject' : activeField === 'bodyText' ? 'body text' : 'HTML body'}`}
-                        >
-                          + Insert
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => navigator.clipboard?.writeText(`{{${v.name}}}`)}
+                        title="Copy token"
+                      >
+                        Copy
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -608,8 +605,8 @@ export function AdminSupport() {
           <h2 style={{ marginTop: 0 }}>Preview</h2>
           {!preview ? (
             <div className="empty">
-              Click <strong>Preview with sample booking</strong> to render the template using a sample booking
-              ({escapeHtml(SAMPLE_BOOKING.ref)} on {escapeHtml(SAMPLE_BOOKING.date)}). The preview does not send an email.
+              Edit the <strong>Sample booking</strong> fields above and click <strong>Render preview with these
+              values</strong> to see how the template looks for those inputs. Nothing here sends anything.
             </div>
           ) : (
             <>
