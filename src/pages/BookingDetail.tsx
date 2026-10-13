@@ -18,6 +18,8 @@ export function BookingDetail() {
   const { holidayName } = useHoliday();
   const [, setRev] = useState(0); // force re-render after cancel
   const justCreated = params.get('justCreated') === '1';
+  const itEmail = params.get('itEmail');                  // 'sent' | 'failed' | null
+  const itEmailError = params.get('itEmailError') || '';
 
   const b = Bookings.byId(Number(id));
   if (!b) {
@@ -70,6 +72,18 @@ export function BookingDetail() {
       {justCreated && (
         <div className="alert alert--success" role="status">
           ✅ Booking <strong>{escapeHtml(b.ref)}</strong> confirmed (FCFS — status set immediately).
+        </div>
+      )}
+
+      {justCreated && itEmail === 'sent' && (
+        <div className="alert alert--success" role="status">
+          📧 IT support email sent to the IT team.
+        </div>
+      )}
+
+      {justCreated && itEmail === 'failed' && (
+        <div className="alert alert--warning" role="status">
+          ⚠️ IT support email failed to send: {escapeHtml(itEmailError)}. The booking is saved — please contact IT directly.
         </div>
       )}
 

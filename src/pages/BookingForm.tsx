@@ -8,6 +8,7 @@ import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings } from '../lib/bookings';
 import { ROOMS } from '../lib/data';
 import { escapeHtml, todayISO } from '../lib/app';
+import { EmailApi, type EmailConfig } from '../lib/api/email';
 
 export function BookingNew() {
   return <BookingForm mode="new" />;
@@ -38,6 +39,10 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
   const [params] = useSearchParams();
   const pathParams = useParams<{ id: string }>();
   const [error, setError] = useState<string | null>(null);
+  // Resolved IT team email + SMTP host — fetched once on mount so the
+  // "Request IT support" hint can show the actual address, and so the
+  // post-save email send doesn't need a second config round-trip.
+  const [emailCfg, setEmailCfg] = useState<EmailConfig | null>(null);
 
   // Resolve initial values
   const editingId = mode === 'edit' ? Number(pathParams.id) : null;
@@ -89,6 +94,15 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preselectedRoom, preselectedDate]);
 
+  // Fetch the resolved IT team email so the checkbox hint can show
+  // the real address ("Notifies tim.wong@systex.com.hk") and so the
+  // submit handler has the SMTP host ready if it needs to log a
+  // failure. Best-effort — if /api/email/config is unreachable the
+  // form still works, the hint just falls back to "IT Admin".
+  useEffect(() => {
+    EmailApi.config().then(setEmailCfg).catch(() => { /* no-op */ });
+  }, []);
+
   if (mode === 'edit' && !editing) {
     return (
       <AppShell title="Edit booking">
@@ -111,11 +125,43 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
     }
     if (mode === 'new') {
       const created = Bookings.create({ ...form, bookedById: user!.id });
+      // If the form ticked IT support, fire the email right after the
+      // local save. We AWAIT it (Postfix on 127.0.0.1 is local so this
+      // is fast) and pass the result to the detail page via query
+      // params so the user sees a real "email sent" or "email failed"
+      // banner — not just a console.log. The booking is already
+      // persisted either way; the email is best-effort.
+      let itEmailStatus = '';
       if (created.itSupport) {
-        // eslint-disable-next-line no-console
-        console.info(`[demo] IT support requested — would notify ADMIN users for booking ${created.ref}`);
+        try {
+          const room = ROOMS.find(r => r.id === created.roomId);
+          await EmailApi.sendItSupport({
+            ref: created.ref,
+            date: created.date,
+            startTime: created.startTime,
+            endTime: created.endTime,
+            room: room?.name || `Room ${created.roomId}`,
+            purpose: created.purpose,
+            supportRequests: created.supportRequests,
+            booker: {
+              name: user!.displayName,
+              // Real SSO users have email set; seed users (Grace, Carl, …)
+              // don't. Fall back to the RFC 2606 reserved domain so the
+              // send still attempts (and fails clearly) rather than the
+              // server rejecting the request as malformed. SSO users
+              // never see this fallback.
+              email: user!.email || `${user!.username}@example.com`,
+              team: user!.team
+            }
+          });
+          itEmailStatus = '&itEmail=sent';
+        } catch (err: any) {
+          // eslint-disable-next-line no-console
+          console.warn('[booking] IT support email failed', err);
+          itEmailStatus = `&itEmail=failed&itEmailError=${encodeURIComponent(err?.message || 'unknown')}`;
+        }
       }
-      nav(`/bookings/${created.id}?justCreated=1`, { replace: true });
+      nav(`/bookings/${created.id}?justCreated=1${itEmailStatus}`, { replace: true });
     } else {
       Bookings.update(editingId!, form);
       nav(`/bookings/${editingId}`, { replace: true });
@@ -281,8 +327,16 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
               checked={form.itSupport}
               onChange={e => setForm({ ...form, itSupport: e.target.checked })}
             />
-            <span>Request IT technical support (notifies IT Admin)</span>
+            <span>
+              Request IT technical support (notifies {emailCfg?.itTeamEmail || 'IT Admin'})
+            </span>
           </label>
+          {form.itSupport && (
+            <span className="form__hint text-muted">
+              An email will be sent to <code>{emailCfg?.itTeamEmail || 'IT Admin'}</code>
+              {emailCfg?.smtpHost ? ` via ${emailCfg.smtpHost}:${emailCfg.smtpPort}` : ''} when this booking is saved.
+            </span>
+          )}
         </div>
         <div className="form__actions form__row--full" style={{ gridColumn: '1 / -1' }}>
           <Link className="btn" to={backHref}>Cancel</Link>

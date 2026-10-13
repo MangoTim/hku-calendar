@@ -29,7 +29,12 @@ export type AuditAction =
   | 'HOLIDAY_REMOVE'
   | 'HOLIDAY_IMPORT'
   | 'HOLIDAY_IMPORT_REMOVE'
-  | 'HOLIDAY_RESET';
+  | 'HOLIDAY_RESET'
+  // Email
+  | 'EMAIL_IT_SUPPORT_SENT'
+  | 'EMAIL_IT_SUPPORT_FAILED'
+  | 'EMAIL_TEST_SENT'
+  | 'EMAIL_TEST_FAILED';
 
 export interface AuditParams {
   actorUsername: string;

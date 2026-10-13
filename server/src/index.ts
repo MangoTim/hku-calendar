@@ -704,6 +704,133 @@ app.delete('/api/holiday-imports/:importId', async (req, res) => {
   }
 });
 
+// ----- Email (SMTP via local Postfix on 127.0.0.1:25) -----
+// Transactional email channel. Today: only the IT-support notification
+// for bookings that tick "IT support" is wired up. Tomorrow: the daily
+// leave report, Teams notifications, etc.
+//
+// All endpoints are public — the FE books/leave/tasks pages are
+// already inside the SSO-or-local-picker session, and a hardened
+// version of this would re-verify auth here. For the demo the goal
+// is "sends an email when the box is ticked" not "rate-limit
+// spammers", so the gate stays simple. The audit row is the record
+// of who triggered the email.
+
+import { sendMail, sendItSupportEmail, smtpConfig } from './email.ts';
+
+// Public config — used by the FE to show "emails will go to X" on the
+// booking form. Returns the resolved IT team address (so FE doesn't
+// need to know about env defaults) and the SMTP host (so the FE can
+// show a "smtp not configured" warning if it's pointed at localhost
+// but Postfix isn't actually running).
+app.get('/api/email/config', (_req, res) => {
+  const cfg = smtpConfig();
+  res.json({
+    itTeamEmail: cfg.itTeamEmail,
+    smtpHost: cfg.host,
+    smtpPort: cfg.port,
+    from: cfg.from
+  });
+});
+
+// IT-support email for a booking. Called by BookingForm after a
+// successful save when the form has itSupport=true. The server is
+// the source of truth for "did the email actually leave" — the FE
+// just shows the toast based on the response.
+app.post('/api/email/it-support', async (req, res) => {
+  const b = req.body ?? {};
+  // Minimal validation — anything missing means the booker forgot
+  // to fill in a field. The booking itself is already saved locally
+  // by the FE; this endpoint just relays the email.
+  const missing: string[] = [];
+  if (!b.ref)             missing.push('ref');
+  if (!b.date)            missing.push('date');
+  if (!b.startTime)       missing.push('startTime');
+  if (!b.endTime)         missing.push('endTime');
+  if (!b.room)            missing.push('room');
+  if (!b.booker?.name)    missing.push('booker.name');
+  if (!b.booker?.email)   missing.push('booker.email');
+  if (missing.length) return res.status(400).json({ error: `missing required fields: ${missing.join(', ')}` });
+  try {
+    const r = await sendItSupportEmail({
+      ref: String(b.ref),
+      date: String(b.date),
+      startTime: String(b.startTime),
+      endTime: String(b.endTime),
+      room: String(b.room),
+      purpose: String(b.purpose || ''),
+      supportRequests: String(b.supportRequests || ''),
+      booker: {
+        name: String(b.booker.name),
+        email: String(b.booker.email),
+        team: String(b.booker.team || '')
+      }
+    });
+    await logAudit({
+      actorUsername: String(b.booker.email),
+      actorUserId: null,
+      actionType: 'EMAIL_IT_SUPPORT_SENT',
+      resourceType: 'booking',
+      resourceId: String(b.ref),
+      summary: `IT support email sent for ${b.ref} (${b.date} ${b.startTime}-${b.endTime} ${b.room}) -> ${smtpConfig().itTeamEmail}`,
+      ipAddress: clientIp(req)
+    });
+    res.json({ ok: true, messageId: r.messageId });
+  } catch (e: any) {
+    await logAudit({
+      actorUsername: String(b.booker?.email || 'unknown'),
+      actorUserId: null,
+      actionType: 'EMAIL_IT_SUPPORT_FAILED',
+      resourceType: 'booking',
+      resourceId: String(b.ref || ''),
+      summary: `IT support email FAILED for ${b.ref || '?'}: ${(e as Error).message}`,
+      ipAddress: clientIp(req),
+      success: false
+    });
+    await logSystem('ERROR', 'email', `IT support send failed for ${b.ref || '?'}`,
+      (e as Error).message).catch(() => {});
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// "Can the SMTP path actually send right now?" — sends a tiny email to
+// an arbitrary address. Useful for /admin/email (next phase) and for
+// ops to confirm Postfix is up after a deploy.
+app.post('/api/email/test', async (req, res) => {
+  const b = req.body ?? {};
+  const to = String(b.to || '').trim();
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: 'valid "to" email required' });
+  try {
+    const r = await sendMail({
+      to,
+      subject: '[ENGG Intranet] SMTP test',
+      text: `This is a test email from the ENGG Intranet server (${new Date().toISOString()}). If you got this, the SMTP path is working.`
+    });
+    await logAudit({
+      actorUsername: to,
+      actorUserId: null,
+      actionType: 'EMAIL_TEST_SENT',
+      resourceType: 'email',
+      summary: `SMTP test email sent to ${to}`,
+      ipAddress: clientIp(req)
+    });
+    res.json({ ok: true, messageId: r.messageId });
+  } catch (e: any) {
+    await logAudit({
+      actorUsername: to,
+      actorUserId: null,
+      actionType: 'EMAIL_TEST_FAILED',
+      resourceType: 'email',
+      summary: `SMTP test FAILED to ${to}: ${(e as Error).message}`,
+      ipAddress: clientIp(req),
+      success: false
+    });
+    await logSystem('ERROR', 'email', `SMTP test failed to ${to}`,
+      (e as Error).message).catch(() => {});
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 // ----- DB inspector (read-only) -----
 // Demo: no auth at the API layer. The frontend gates /admin/database on
 // ROLE.isAdmin() via <RequireRole>. Production would enforce ADMIN from a
