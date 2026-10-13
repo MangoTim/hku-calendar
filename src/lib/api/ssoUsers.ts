@@ -23,6 +23,15 @@ export const SsoUsers = {
     return jsonFetch<{ users: SsoUserView[] }>('/api/sso/users');
   },
 
+  /** Read-only directory of all SSO users, open to any signed-in user
+   *  (not admin-gated). Used by the people pickers on Tasks / Leave /
+   *  Bookings pages so a non-admin user (e.g. a USER-role SSO row) still
+   *  sees their colleagues in the Assignee dropdown. Same payload shape
+   *  as `list()`. */
+  async directory(): Promise<{ users: SsoUserView[] }> {
+    return jsonFetch<{ users: SsoUserView[] }>('/api/sso/users/directory');
+  },
+
   async lookup(email: string): Promise<{ user: SsoUserView | null }> {
     return jsonFetch<{ user: SsoUserView | null }>(
       `/api/sso/users/lookup?email=${encodeURIComponent(email)}`

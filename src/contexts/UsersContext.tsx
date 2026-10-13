@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import type { User } from '../lib/types';
 import { UserAdmin } from '../lib/userAdmin';
 import { SsoUsers } from '../lib/api/ssoUsers';
+import { useAuth } from './AuthContext';
 
 interface UsersCtx {
   /** Merged list: seed USERS (with overrides) + LS-created + SSO. */
@@ -25,23 +26,36 @@ interface UsersCtx {
 const Ctx = createContext<UsersCtx | null>(null);
 
 export function UsersProvider({ children }: { children: ReactNode }) {
+  const { session } = useAuth();
   const [ssoUsers, setSsoUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
     try {
-      const r = await SsoUsers.list();
+      // `directory` (not `list`) — the directory endpoint is open to any
+      // signed-in user so a non-admin SSO user (USER / TASK_MANAGER /
+      // AUDITOR) still sees their colleagues in the people pickers on
+      // Tasks / Leave / Bookings. `list` is admin-gated and would 403.
+      const r = await SsoUsers.directory();
       setSsoUsers(r.users);
     } catch {
-      // SSO list fetch can fail with 401 before admin sign-in; we silently
-      // fall back to seed+LS users. Pages that need SSO users can check
-      // `loading` for pending state.
+      // Directory fetch can fail before sign-in (no session cookie yet);
+      // we silently fall back to seed+LS users. Pages that need SSO users
+      // can check `loading` for pending state — `reload()` re-fetches when
+      // the session is established (see the session effect below).
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => { reload(); }, [reload]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-fetch the directory whenever the session userId changes — covers
+  // the bootstrap case where the very first directory() call 401'd
+  // because no session cookie was present yet (cold visit to /sso-finish,
+  // or first paint of /login before the user picks an account).
+  const sessionUserId = session?.userId ?? null;
+  useEffect(() => { if (sessionUserId != null) reload(); }, [sessionUserId, reload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const users = useMemo<User[]>(() => {
     const seed = UserAdmin.all();

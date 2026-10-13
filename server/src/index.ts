@@ -151,6 +151,45 @@ async function readLocalAdminToken(req: express.Request): Promise<string | null>
   return token ? decodeURIComponent(token) : null;
 }
 
+/** "Is there any valid session cookie on this request?" — accepts either
+ *  sso_session (SSO sign-in) or local_admin (LOCAL/DEMO sign-in via the
+ *  /login picker). No role check. Used by endpoints that should be open to
+ *  any signed-in user (e.g. the SSO directory read used to populate people
+ *  pickers on the Tasks / Leave / Bookings pages). */
+async function requireSignedIn(req: express.Request, res: express.Response, next: express.NextFunction) {
+  // Path 1: SSO session.
+  const ssoToken = await readSsoSessionToken(req);
+  if (ssoToken) {
+    try {
+      const v = await jose.jwtVerify(ssoToken, COOKIE_SECRET, { algorithms: ['HS256'] });
+      const email = String((v.payload as any)?.email || '').toLowerCase();
+      if (email) {
+        const u = await findSsoUserByEmail(email);
+        if (u && u.enabled) {
+          (req as any).userId = u.id;
+          (req as any).userSource = 'sso';
+          return next();
+        }
+      }
+    } catch { /* fall through to local_admin */ }
+  }
+  // Path 2: local_admin cookie (LOCAL/DEMO sign-in via /login picker).
+  const localToken = await readLocalAdminToken(req);
+  if (localToken) {
+    try {
+      const v = await jose.jwtVerify(localToken, COOKIE_SECRET, { algorithms: ['HS256'] });
+      const p = v.payload as any;
+      const userId = Number(p?.userId);
+      if (Number.isFinite(userId)) {
+        (req as any).userId = userId;
+        (req as any).userSource = String(p?.source || '').toLowerCase() || 'local';
+        return next();
+      }
+    } catch { /* fall through */ }
+  }
+  return res.status(401).json({ error: 'sign-in required' });
+}
+
 /** Two-path admin gate:
  *
  *   1. sso_session cookie (verified + looked up in sso_users, requires role
@@ -267,6 +306,19 @@ const isSsoRole = (r: any): r is 'USER' | 'TASK_MANAGER' | 'ADMIN' | 'AUDITOR' =
   ['USER', 'TASK_MANAGER', 'ADMIN', 'AUDITOR'].includes(r);
 
 app.get('/api/sso/users', requireAdmin, async (_req, res) => {
+  try {
+    res.json({ users: await listSsoUsers() });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Read-only directory for any signed-in user. The /api/sso/users endpoint
+// is admin-gated for CRUD; this one is open to all sessions (SSO + local
+// admin) so the FE can populate Assignee / Person / Booker dropdowns in
+// Tasks / Leave / Bookings without each non-admin user hitting 403. The
+// payload is the same shape — full sso_users rows minus nothing.
+app.get('/api/sso/users/directory', requireSignedIn, async (_req, res) => {
   try {
     res.json({ users: await listSsoUsers() });
   } catch (e: any) {
