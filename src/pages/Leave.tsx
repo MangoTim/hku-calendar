@@ -168,9 +168,9 @@ export function LeavePage() {
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        {view === 'month' && <MonthGrid anchor={anchor} leaveOnDay={leaveOnDay} />}
-        {view === 'week' && <WeekGrid anchor={anchor} leaveOnDay={leaveOnDay} />}
-        {view === 'day' && <DayGrid anchor={anchor} leaveOnDay={leaveOnDay} />}
+        {view === 'month' && <MonthGrid anchor={anchor} leaveOnDay={leaveOnDay} currentUserId={user!.id} />}
+        {view === 'week' && <WeekGrid anchor={anchor} leaveOnDay={leaveOnDay} currentUserId={user!.id} />}
+        {view === 'day' && <DayGrid anchor={anchor} leaveOnDay={leaveOnDay} currentUserId={user!.id} />}
       </div>
 
       <div className="card" style={{ marginTop: 'var(--space-4)' }}>
@@ -193,9 +193,10 @@ export function LeavePage() {
 }
 
 // ---------------- Month view ----------------
-function MonthGrid({ anchor, leaveOnDay }: {
+function MonthGrid({ anchor, leaveOnDay, currentUserId }: {
   anchor: string;
   leaveOnDay: (iso: string) => LeaveRec[];
+  currentUserId: number;
 }) {
   const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
@@ -231,7 +232,7 @@ function MonthGrid({ anchor, leaveOnDay }: {
                       Holiday: {hname}
                     </div>
                   )}
-                  {dayLeaves.slice(0, 3).map(l => <LeaveChip key={l.id} l={l} />)}
+                  {dayLeaves.slice(0, 3).map(l => <LeaveChip key={l.id} l={l} currentUserId={currentUserId} />)}
                   {dayLeaves.length > 3 && (
                     <div className="text-muted text-sm">+{dayLeaves.length - 3} more</div>
                   )}
@@ -246,9 +247,10 @@ function MonthGrid({ anchor, leaveOnDay }: {
 }
 
 // ---------------- Week view ----------------
-function WeekGrid({ anchor, leaveOnDay }: {
+function WeekGrid({ anchor, leaveOnDay, currentUserId }: {
   anchor: string;
   leaveOnDay: (iso: string) => LeaveRec[];
+  currentUserId: number;
 }) {
   const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
@@ -291,7 +293,7 @@ function WeekGrid({ anchor, leaveOnDay }: {
               <td key={j} className={cls}>
                 <div className="day-num">{day.getDate()}</div>
                 {dayLeaves.length > 0
-                  ? dayLeaves.map(l => <LeaveChip key={l.id} l={l} />)
+                  ? dayLeaves.map(l => <LeaveChip key={l.id} l={l} currentUserId={currentUserId} />)
                   : hname
                     ? <div className="text-muted text-sm">Holiday: {hname}</div>
                     : <div className="text-muted text-sm">—</div>}
@@ -305,9 +307,10 @@ function WeekGrid({ anchor, leaveOnDay }: {
 }
 
 // ---------------- Day view ----------------
-function DayGrid({ anchor, leaveOnDay }: {
+function DayGrid({ anchor, leaveOnDay, currentUserId }: {
   anchor: string;
   leaveOnDay: (iso: string) => LeaveRec[];
+  currentUserId: number;
 }) {
   const { holidayName } = useHoliday();
   const { findById } = useUsers();
@@ -339,13 +342,18 @@ function DayGrid({ anchor, leaveOnDay }: {
               {dayLeaves.map(l => {
                 const u = findById(l.userId);
                 const meta = Leave.typeMeta(l.type);
+                const isMine = l.userId === currentUserId;
                 return (
-                  <tr key={l.id}>
-                    <td><Link to={`/leave/${l.id}`}>{u?.displayName || '—'}</Link></td>
+                  <tr key={l.id} className={isMine ? 'is-mine' : ''}>
+                    <td>
+                      <Link to={`/leave/${l.id}`}>
+                        {u?.displayName || '—'}{isMine ? <span className="text-sm" style={{ marginLeft: 6, color: '#1e3a8a', fontWeight: 600 }}>(you)</span> : null}
+                      </Link>
+                    </td>
                     <td>{u?.team || ''}</td>
                     <td>
                       <span
-                        className={`chip chip--leave-${meta.color}`}
+                        className={`chip chip--leave-${meta.color}${isMine ? ' chip--mine' : ''}`}
                         style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}
                       >
                         {meta.label}
@@ -367,14 +375,15 @@ function DayGrid({ anchor, leaveOnDay }: {
 }
 
 // ---------------- Shared chip ----------------
-function LeaveChip({ l }: { l: LeaveRec }) {
+function LeaveChip({ l, currentUserId }: { l: LeaveRec; currentUserId: number }) {
   const { findById } = useUsers();
   const u = findById(l.userId);
   const meta = Leave.typeMeta(l.type);
+  const isMine = l.userId === currentUserId;
   return (
     <Link
       to={`/leave/${l.id}`}
-      className={`chip chip--leave-${meta.color}`}
+      className={`chip chip--leave-${meta.color}${isMine ? ' chip--mine' : ''}`}
       title={l.note || meta.label}
     >
       {u?.displayName || '—'}

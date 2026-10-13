@@ -770,6 +770,20 @@ option:hover, option:focus, option:checked, option:active {
 .chip--leave-purple  { background: #ede9fe; color: #5b21b6; border-left-color: #7c3aed; }
 .chip--leave-muted   { background: #e5e7eb; color: #374151; border-left-color: #6b7280; }
 
+/* "Mine" highlight — the chip belongs to the signed-in user. Applied
+   alongside any chip--leave-* variant in Bookings/Leave calendars so the
+   current user's plans read as "their" calendar at a glance. The deep blue
+   with white text (13:1 contrast, AAA) deliberately inverts the usual
+   dark-text-on-light pattern so "mine" pops out of a row of light chips.
+   Chained (.chip.chip--mine) to tie the specificity at (0,3,0) and
+   placed AFTER the leave variants so source order also favors mine when a
+   chip carries BOTH a leave type and a mine marker. */
+.cal .chip.chip--mine { background: #1e3a8a; color: #ffffff; border-left-color: #1e40af; font-weight: 600; }
+.chip.chip--mine       { background: #1e3a8a; color: #ffffff; border-left-color: #1e40af; font-weight: 600; }
+/* Day-view table row tint so the "my leave" entry is obvious in the list */
+.table tr.is-mine td { background: rgba(30, 58, 138, 0.08); }
+.table tr.is-mine td:first-child { font-weight: 600; color: #1e3a8a; }
+
 /* ---------- Dashboard calendar (multi-source chips) ----------
    The summary calendar under the Dashboard shows bookings, leave, and task
    deadlines on the same day cell. We reuse .chip but tighten the layout and

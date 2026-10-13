@@ -150,18 +150,19 @@ export function BookingsPage() {
       </div>
 
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        {view === 'month' && <MonthGrid anchor={anchor} bookingsOnDay={bookingsOnDay} />}
-        {view === 'week' && <WeekGrid anchor={anchor} bookingsOnDay={bookingsOnDay} />}
-        {view === 'day' && <DayGrid anchor={anchor} bookingsOnDay={bookingsOnDay} />}
+        {view === 'month' && <MonthGrid anchor={anchor} bookingsOnDay={bookingsOnDay} currentUserId={user!.id} />}
+        {view === 'week' && <WeekGrid anchor={anchor} bookingsOnDay={bookingsOnDay} currentUserId={user!.id} />}
+        {view === 'day' && <DayGrid anchor={anchor} bookingsOnDay={bookingsOnDay} currentUserId={user!.id} />}
       </div>
     </AppShell>
   );
 }
 
 // ---------------- Month view ----------------
-function MonthGrid({ anchor, bookingsOnDay }: {
+function MonthGrid({ anchor, bookingsOnDay, currentUserId }: {
   anchor: string;
   bookingsOnDay: (iso: string) => Booking[];
+  currentUserId: number;
 }) {
   const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
@@ -201,7 +202,7 @@ function MonthGrid({ anchor, bookingsOnDay }: {
                       Holiday: {hname}
                     </div>
                   )}
-                  {dayBookings.slice(0, 3).map(b => <BookingChip key={b.id} b={b} />)}
+                  {dayBookings.slice(0, 3).map(b => <BookingChip key={b.id} b={b} currentUserId={currentUserId} />)}
                   {dayBookings.length > 3 && (
                     <div className="text-muted text-sm">+{dayBookings.length - 3} more</div>
                   )}
@@ -216,9 +217,10 @@ function MonthGrid({ anchor, bookingsOnDay }: {
 }
 
 // ---------------- Week view ----------------
-function WeekGrid({ anchor, bookingsOnDay }: {
+function WeekGrid({ anchor, bookingsOnDay, currentUserId }: {
   anchor: string;
   bookingsOnDay: (iso: string) => Booking[];
+  currentUserId: number;
 }) {
   const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
@@ -261,7 +263,7 @@ function WeekGrid({ anchor, bookingsOnDay }: {
               <td key={j} className={cls}>
                 <div className="day-num">{day.getDate()}</div>
                 {dayBookings.length > 0
-                  ? dayBookings.map(b => <BookingChip key={b.id} b={b} />)
+                  ? dayBookings.map(b => <BookingChip key={b.id} b={b} currentUserId={currentUserId} />)
                   : hname && <div className="text-muted text-sm">Holiday: {hname}</div>}
               </td>
             );
@@ -273,9 +275,10 @@ function WeekGrid({ anchor, bookingsOnDay }: {
 }
 
 // ---------------- Day view ----------------
-function DayGrid({ anchor, bookingsOnDay }: {
+function DayGrid({ anchor, bookingsOnDay, currentUserId }: {
   anchor: string;
   bookingsOnDay: (iso: string) => Booking[];
+  currentUserId: number;
 }) {
   const { holidayName } = useHoliday();
   const d = new Date(anchor + 'T00:00:00');
@@ -311,11 +314,12 @@ function DayGrid({ anchor, bookingsOnDay }: {
                 <td style={{ padding: 8 }}>
                   {slot.map(b => {
                     const room = ROOMS.find(r => r.id === b.roomId);
+                    const isMine = b.bookedById === currentUserId;
                     return (
                       <Link
                         key={b.id}
                         to={`/bookings/${b.id}`}
-                        className={`chip ${b.itSupport ? 'chip--it' : ''}`}
+                        className={`chip${b.itSupport ? ' chip--it' : ''}${isMine ? ' chip--mine' : ''}`}
                         style={{ display: 'block', marginBottom: 4 }}
                       >
                         <strong>{b.startTime}–{b.endTime}</strong> · {room?.name || '—'}
@@ -334,9 +338,10 @@ function DayGrid({ anchor, bookingsOnDay }: {
 }
 
 // ---------------- Shared chip ----------------
-function BookingChip({ b }: { b: Booking }) {
+function BookingChip({ b, currentUserId }: { b: Booking; currentUserId: number }) {
   const room = ROOMS.find(r => r.id === b.roomId);
-  const cls = `chip${b.itSupport ? ' chip--it' : ''}`;
+  const isMine = b.bookedById === currentUserId;
+  const cls = `chip${b.itSupport ? ' chip--it' : ''}${isMine ? ' chip--mine' : ''}`;
   return (
     <Link
       to={`/bookings/${b.id}`}
