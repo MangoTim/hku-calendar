@@ -186,17 +186,14 @@ export function initSso(app: Express): void {
     // and-forget — a missing match (or DB error) doesn't affect this login.
     recordSsoOidByEmail(email, oid).catch(() => { /* no-op */ });
 
-    // 7. Render the success page. For a fully wired demo, redirect to
-    // POST_LOGIN instead — but the user wanted to "see whether SSO works"
-    // first, so the explicit confirmation page is more useful.
-    res.send(successHtml({
-      name,
-      email,
-      oid,
-      tenant: cfg.tenantId,
-      expires: new Date((payload.exp as number) * 1000).toISOString(),
-      postLoginUrl: POST_LOGIN
-    }));
+    // Hand off to /sso-finish, which reads the cookie (set above) and
+    // resolves the user via the sso_users allowlist:
+    //   - allowed & enabled → sign in, redirect to POST_LOGIN
+    //   - not in allowlist  → render the "No account is registered" page
+    //   - in allowlist but disabled → render the "Account is disabled" page
+    // No intermediate successHtml confirmation card — the bridge path
+    // alone is the user-facing UX.
+    res.redirect('/sso-finish');
   });
 
   // Used by the FE AuthContext to learn who (if anyone) is signed in via
@@ -331,80 +328,6 @@ function errorHtml(title: string, detail: string): string {
     <h1>⚠️ ${escapeHtml(title)}</h1>
     <pre>${escapeHtml(detail)}</pre>
     <p style="margin-top: 24px;"><a href="/api/sso/login">← Try signing in again</a> · <a href="/login">Use demo sign-in instead</a></p>
-  </div>
-</body>
-</html>`;
-}
-
-function successHtml(u: {
-  name: string; email: string; oid: string; tenant: string;
-  expires: string; postLoginUrl: string;
-}): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>HKU SSO — signed in</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-    .card { max-width: 560px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 32px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-    h1 { margin: 0 0 12px; color: #6ee7b7; font-size: 24px; }
-    p { color: #cbd5e1; line-height: 1.55; }
-    dl { display: grid; grid-template-columns: 120px 1fr; gap: 8px 16px; margin: 20px 0; }
-    dt { color: #94a3b8; font-size: 13px; }
-    dd { margin: 0; color: #f1f5f9; }
-    code { background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #e0e7ff; font-size: 13px; }
-    a.btn { display: inline-block; margin-top: 16px; padding: 10px 18px; background: #00a884; color: #0f172a; border-radius: 6px; text-decoration: none; font-weight: 600; }
-    a.btn:hover { background: #00c896; }
-    .footer { margin-top: 24px; font-size: 13px; color: #94a3b8; border-top: 1px solid #334155; padding-top: 16px; }
-  </style>
-  <script>
-    // Bridge the verified identity onto the manual Continue button instead
-    // of auto-navigating. Previously this called location.replace() to jump
-    // straight to /sso-finish, but users reported the success card flashing
-    // past in ~1 second without the chance to read/click it. Now the card
-    // stays put; clicking Continue passes the oid/name/email + return URL
-    // through /sso-finish, which re-validates the cookie and signs the user
-    // in.
-    //
-    // JSON.stringify() here keeps Microsoft's JWT payload values safe to
-    // concatenate into JS source — escapeHtml already kept them safe in
-    // the HTML above. The /sso-finish React route uses the params
-    // diagnostically only; it re-validates the cookie via /api/auth/session
-    // before doing anything privileged.
-    window.addEventListener('DOMContentLoaded', function () {
-      fetch('/api/auth/session').then(function (r) { return r.json(); }).then(function (data) {
-        var user = data && data.user;
-        if (!user || user.source !== 'sso') return;
-        var params = new URLSearchParams({
-          oid: user.oid || '',
-          name: user.name || '',
-          email: user.email || '',
-          return: ${JSON.stringify(u.postLoginUrl)}
-        });
-        var cont = document.getElementById('sso-continue');
-        if (cont) cont.href = '/sso-finish?' + params.toString();
-      }).catch(function () { /* leave Continue at its static href */ });
-    });
-  </script>
-</head>
-<body>
-  <div class="card">
-    <h1>✅ SSO sign-in successful</h1>
-    <p>You are signed in via Microsoft Entra ID. The ID token signature was verified against the Azure AD JWKS endpoint, and a signed session cookie (<code>sso_session</code>) is now set on this domain.</p>
-    <dl>
-      <dt>Display name</dt><dd>${escapeHtml(u.name)}</dd>
-      <dt>Email</dt><dd>${escapeHtml(u.email || '—')}</dd>
-      <dt>Azure OID</dt><dd><code>${escapeHtml(u.oid)}</code></dd>
-      <dt>Tenant</dt><dd><code>${escapeHtml(u.tenant)}</code></dd>
-      <dt>ID token expires</dt><dd><code>${escapeHtml(u.expires)}</code></dd>
-    </dl>
-    <a class="btn" id="sso-continue" href="${escapeHtml(u.postLoginUrl)}">→ Continue to ${escapeHtml(u.postLoginUrl)}</a>
-    <div class="footer">
-      Round-trip complete: <code>/api/sso/login</code> → Azure AD → <code>/api/sso/callback</code> (code exchanged, ID token verified, session cookie set).<br />
-      Click <strong>Continue</strong> to finish signing in.
-    </div>
   </div>
 </body>
 </html>`;
