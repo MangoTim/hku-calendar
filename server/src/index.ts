@@ -313,16 +313,20 @@ app.get('/api/sso/users', requireAdmin, async (_req, res) => {
   }
 });
 
-// Read-only directory for any signed-in user. The /api/sso/users endpoint
-// is admin-gated for CRUD; this one is open to all sessions (SSO + local
-// admin) so the FE can populate Assignee / Person / Booker dropdowns in
-// Tasks / Leave / Bookings without each non-admin user hitting 403. The
-// payload is the same shape — full sso_users rows minus nothing.
-app.get('/api/sso/users/directory', requireSignedIn, async (req, res) => {
+// Read-only directory of all SSO users. Public (no auth required) — the
+// FE uses this to populate Assignee / Person / Booker dropdowns in Tasks
+// / Leave / Bookings on every page, and gating it behind a session cookie
+// was unreliable: a `Secure` cookie set on an HTTPS callback is not sent
+// on HTTP-origin FE fetches, and the sso_session can be missing on the
+// very first render of /login or /sso-finish before bootstrap completes.
+// The directory is a read-only list of names/emails/roles; the same data
+// is otherwise accessible via /api/sso/users/lookup (which has always
+// been public). Admin CRUD stays gated on /api/sso/users.
+app.get('/api/sso/users/directory', async (req, res) => {
   try {
     const users = await listSsoUsers();
     // eslint-disable-next-line no-console
-    console.info(`[sso/directory] userId=${(req as any).userId} source=${(req as any).userSource} -> ${users.length} rows`);
+    console.info(`[sso/directory] cookies=${req.headers.cookie ? req.headers.cookie.slice(0, 60) + '...' : 'none'} -> ${users.length} rows`);
     res.json({ users });
   } catch (e: any) {
     res.status(500).json({ error: (e as Error).message });
