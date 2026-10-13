@@ -122,6 +122,9 @@ export function BookingDetail() {
                 <td>
                   {booker?.displayName || '—'}{' '}
                   <span className="text-muted">({booker?.team || ''})</span>
+                  {allMatches.length > 1 && (
+                    <span className="text-muted text-sm"> · {allMatches.length} rows share id {b.bookedById}: {allMatches.map(u => `${u.displayName}(${u.source})`).join(', ')}</span>
+                  )}
                 </td>
               </tr>
               <tr>
