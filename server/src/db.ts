@@ -1,6 +1,7 @@
 // DB module — connection pool, schema bootstrap, seed migration.
 import pg from 'pg';
 import { AUDIT_EVENTS, SYSTEM_LOGS } from '../../src/lib/data.ts';
+import { logSystem } from './audit.ts';
 
 // Coerce DATE / TIME columns to ISO strings at the driver layer so they
 // round-trip losslessly in any server timezone (the .105 / local / .103 VMs
@@ -194,6 +195,15 @@ async function ensureSchema(): Promise<void> {
     END $$;
   `);
   console.log('[db] schema ensured');
+  // Migration event — fires every boot after ensureSchema. Operators
+  // reading /admin/system-logs can confirm the server reached the
+  // "schema is good" state. Distinguishes "booted but failed before
+  // schema" from "booted cleanly". Best-effort: schema/system_logs
+  // races on a brand-new DB are impossible (system_logs was just
+  // created above), so this should never throw.
+  logSystem('INFO', 'db', 'schema ensured',
+    `db=${DATABASE} host=${HOST}:${PORT} user=${USER} tables=audit_events,system_logs,holidays,holiday_seed_removed,holiday_imports,sso_config,sso_users`
+  ).catch(e => console.error('[syslog] schema-ensured event failed', e));
 }
 
 async function seedIfEmpty(): Promise<void> {
@@ -209,6 +219,7 @@ async function seedIfEmpty(): Promise<void> {
     }
     // Re-sync the sequence past the max seeded id
     await pool!.query(`SELECT setval('audit_events_id_seq', (SELECT MAX(id) FROM audit_events))`);
+    logSystem('INFO', 'db', `seeded ${AUDIT_EVENTS.length} audit events`, '').catch(() => {});
   }
   const s = await pool!.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM system_logs');
   if (Number(s.rows[0].count) === 0) {
@@ -221,6 +232,7 @@ async function seedIfEmpty(): Promise<void> {
       );
     }
     await pool!.query(`SELECT setval('system_logs_id_seq', (SELECT MAX(id) FROM system_logs))`);
+    logSystem('INFO', 'db', `seeded ${SYSTEM_LOGS.length} system logs`, '').catch(() => {});
   }
 
   // SSO singleton — seed from env on first boot so the existing .105 deploy
@@ -237,6 +249,9 @@ async function seedIfEmpty(): Promise<void> {
       [tenant, authority, client, secret]
     );
     console.log(`[db] seeded sso_config row from env (tenant=${tenant ? 'set' : 'empty'})`);
+    logSystem('INFO', 'db', 'seeded sso_config row from env',
+      `tenant=${tenant ? 'set' : 'empty'} clientId=${client ? 'set' : 'empty'} secret=${secret ? 'set' : 'empty'}`
+    ).catch(() => {});
   }
 
   // Bootstrap SSO admin from env. Solves the chicken-and-egg where the
@@ -260,6 +275,9 @@ async function seedIfEmpty(): Promise<void> {
         [seedEmail, seedName, local]
       );
       console.log(`[db] seeded initial SSO admin ${seedEmail} (display="${seedName}")`);
+      logSystem('INFO', 'db', `seeded initial SSO admin ${seedEmail}`,
+        `displayName="${seedName}" username="${local}" role=ADMIN source=SSO_SEED_ADMIN_EMAIL`
+      ).catch(() => {});
     } else {
       console.log(`[db] SSO_SEED_ADMIN_EMAIL ${seedEmail} already exists — skipping seed`);
     }

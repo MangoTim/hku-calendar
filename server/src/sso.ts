@@ -26,6 +26,7 @@ import * as jose from 'jose';
 import { getSsoConfig, type SsoDbConfig } from './ssoConfig.ts';
 import { recordSsoOidByEmail } from './ssoUsers.ts';
 import { COOKIE_SECRET } from './cookieSecret.ts';
+import { logAudit, logSystem } from './audit.ts';
 
 const REDIRECT_URI  = process.env.SSO_REDIRECT_URI;
 const POST_LOGIN    = process.env.SSO_POST_LOGIN_REDIRECT || '/dashboard';
@@ -87,10 +88,20 @@ export function initSso(app: Express): void {
       return;
     }
 
+    const ip = clientIp(req);
     const { code, state, error: azureError, error_description } = req.query as Record<string, string | undefined>;
 
     // 1. Azure-side errors (user declined, consent missing, etc.)
     if (azureError) {
+      await logAudit({
+        actorUsername: 'anonymous',
+        actorUserId: null,
+        actionType: 'SSO_LOGIN_FAILURE',
+        resourceType: 'sso',
+        summary: `Azure returned ${azureError}${error_description ? ` — ${error_description}` : ''}`,
+        ipAddress: ip,
+        success: false
+      });
       res.status(400).send(errorHtml(
         'Azure returned an error',
         `${azureError}${error_description ? ` — ${error_description}` : ''}`
@@ -106,6 +117,15 @@ export function initSso(app: Express): void {
     // 2. CSRF guard — state must match the cookie set at /api/sso/login.
     const cookieState = readCookie(req, 'sso_state');
     if (!cookieState || cookieState !== state) {
+      await logAudit({
+        actorUsername: 'anonymous',
+        actorUserId: null,
+        actionType: 'SSO_LOGIN_FAILURE',
+        resourceType: 'sso',
+        summary: 'state mismatch (possible CSRF or stale request)',
+        ipAddress: ip,
+        success: false
+      });
       res.status(400).send(errorHtml('State mismatch', 'The state parameter did not match the sso_state cookie. Possible CSRF attack or stale request — try signing in again.'));
       return;
     }
@@ -132,11 +152,29 @@ export function initSso(app: Express): void {
       );
       if (!r.ok) {
         const body = await r.text();
+        await logAudit({
+          actorUsername: 'anonymous',
+          actorUserId: null,
+          actionType: 'SSO_LOGIN_FAILURE',
+          resourceType: 'sso',
+          summary: `token exchange failed: ${r.status} ${r.statusText}`,
+          ipAddress: ip,
+          success: false
+        });
         res.status(500).send(errorHtml('Token exchange failed', `${r.status} ${r.statusText}\n\n${body.slice(0, 500)}`));
         return;
       }
       tokens = await r.json() as typeof tokens;
     } catch (e: any) {
+      await logAudit({
+        actorUsername: 'anonymous',
+        actorUserId: null,
+        actionType: 'SSO_LOGIN_FAILURE',
+        resourceType: 'sso',
+        summary: `token exchange network error: ${(e as Error).message}`,
+        ipAddress: ip,
+        success: false
+      });
       res.status(500).send(errorHtml('Token exchange network error', (e as Error).message));
       return;
     }
@@ -154,6 +192,15 @@ export function initSso(app: Express): void {
       });
       payload = verified.payload as typeof payload;
     } catch (e: any) {
+      await logAudit({
+        actorUsername: 'anonymous',
+        actorUserId: null,
+        actionType: 'SSO_LOGIN_FAILURE',
+        resourceType: 'sso',
+        summary: `id_token verification failed: ${(e as Error).message}`,
+        ipAddress: ip,
+        success: false
+      });
       res.status(401).send(errorHtml('ID token verification failed', (e as Error).message));
       return;
     }
@@ -179,6 +226,22 @@ export function initSso(app: Express): void {
       secure: true,
       maxAge: 8 * 60 * 60 * 1000,
       path: '/'
+    });
+
+    // Audit: Azure-side authentication succeeded and sso_session cookie
+    // was issued. The FE bridge (SsoFinish) then performs the allowlist
+    // check separately; we record the Azure-level success here so the
+    // admin page shows who has been knocking at the door even when they
+    // are not in the allowlist.
+    await logAudit({
+      actorUsername: email || 'unknown',
+      actorUserId: null,
+      actionType: 'SSO_LOGIN_SUCCESS',
+      resourceType: 'sso',
+      resourceId: oid,
+      summary: `Azure SSO completed for ${email || 'unknown'} (oid=${oid})`,
+      ipAddress: ip,
+      success: true
     });
 
     // Record the Azure OID onto the matching sso_users row (if any). Fire-
@@ -265,6 +328,16 @@ function setCookie(res: any, name: string, value: string, opts: {
 
 function clearCookie(res: any, name: string): void {
   res.append('Set-Cookie', `${name}=; Path=/; Max-Age=0`);
+}
+
+/** Client IP for audit logs. Trusts the first hop in X-Forwarded-For if
+ *  present (the demo runs behind ngrok / a reverse proxy); otherwise
+ *  falls back to the socket remote address. */
+function clientIp(req: Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0].trim();
+  if (Array.isArray(xff) && xff.length > 0) return xff[0];
+  return req.socket?.remoteAddress ?? '';
 }
 
 function escapeHtml(s: string): string {

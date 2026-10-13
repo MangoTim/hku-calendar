@@ -37,6 +37,7 @@ import { COOKIE_SECRET } from './cookieSecret.ts';
 import {
   listSsoUsers,
   findSsoUserByEmail,
+  getSsoUserById,
   createSsoUser,
   updateSsoUser,
   deleteSsoUser,
@@ -44,6 +45,7 @@ import {
 } from './ssoUsers.ts';
 import type { HolidayFormat } from '../../src/lib/types.ts';
 import * as jose from 'jose';
+import { logAudit, logSystem } from './audit.ts';
 
 const PORT = Number(process.env.PORT || 8092);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -108,6 +110,14 @@ app.put('/api/sso/config', async (req, res) => {
       },
       null
     );
+    await logAudit({
+      actorUsername: 'admin',
+      actorUserId: null,
+      actionType: 'SSO_CONFIG_UPDATE',
+      resourceType: 'sso_config',
+      summary: `SSO config updated: mode=${mode} directoryMode=${directoryMode} tenant=${tenantId.trim()}`,
+      ipAddress: clientIp(req)
+    });
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: (e as Error).message });
@@ -117,8 +127,12 @@ app.put('/api/sso/config', async (req, res) => {
 app.post('/api/sso/test', async (_req, res) => {
   try {
     const r = await testSsoConnection();
+    await logSystem(r.ok ? 'INFO' : 'WARN', 'sso',
+      r.ok ? 'SSO connection test passed' : 'SSO connection test failed',
+      r.steps.join(' | '));
     res.json(r);
   } catch (e: any) {
+    await logSystem('ERROR', 'sso', 'SSO test endpoint error', (e as Error).message);
     res.status(500).json({ error: (e as Error).message, ok: false, steps: [] });
   }
 });
@@ -137,6 +151,16 @@ async function readSsoSessionToken(req: express.Request): Promise<string | null>
     .find(s => s.startsWith('sso_session='))
     ?.slice('sso_session='.length);
   return token ? decodeURIComponent(token) : null;
+}
+
+/** Client IP for audit logs. Trusts the first hop in X-Forwarded-For if
+ *  present (the demo runs behind ngrok / a reverse proxy); otherwise
+ *  falls back to the socket remote address. */
+function clientIp(req: express.Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0].trim();
+  if (Array.isArray(xff) && xff.length > 0) return xff[0];
+  return req.socket?.remoteAddress ?? '';
 }
 
 async function readLocalAdminToken(req: express.Request): Promise<string | null> {
@@ -212,6 +236,7 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
         if (u && u.enabled && u.role === 'ADMIN') {
           (req as any).adminUserId = u.id;
           (req as any).adminSource = 'sso';
+          (req as any).adminUsername = u.email;
           return next();
         }
       }
@@ -229,10 +254,25 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
       if (Number.isFinite(userId) && role === 'ADMIN' && (source === 'LOCAL' || source === 'DEMO') && p?.enabled !== false) {
         (req as any).adminUserId = userId;
         (req as any).adminSource = source.toLowerCase();
+        (req as any).adminUsername = `local:${userId}`;
         return next();
       }
     } catch { /* fall through */ }
   }
+  // Audit auth failure — note this fires on every admin-API call that
+  // lacked a valid SSO or local_admin cookie. Helps catch scanning /
+  // misconfigured-client attempts. The summary keeps the source IP and
+  // method+path so it survives without an actor identity.
+  const ip = clientIp(req);
+  await logAudit({
+    actorUsername: 'anonymous',
+    actorUserId: null,
+    actionType: 'ADMIN_AUTH_FAILURE',
+    resourceType: req.baseUrl + req.path,
+    summary: `${req.method} ${req.originalUrl} from ${ip} (no valid SSO/local_admin cookie)`,
+    ipAddress: ip,
+    success: false
+  });
   return res.status(401).json({ error: 'admin session required (sign in as an ADMIN role via /login or SSO)' });
 }
 
@@ -275,14 +315,30 @@ app.post('/api/sso/local-admin-session', async (req, res) => {
       'SameSite=Lax'
     ];
     res.append('Set-Cookie', segs.join('; '));
+    await logAudit({
+      actorUsername: `local:${userId}`,
+      actorUserId: userId,
+      actionType: 'LOCAL_ADMIN_LOGIN',
+      resourceType: 'local_admin',
+      summary: `local_admin cookie minted for userId=${userId} (${source})`,
+      ipAddress: clientIp(req)
+    });
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: (e as Error).message });
   }
 });
 
-app.post('/api/sso/local-admin-logout', (_req, res) => {
+app.post('/api/sso/local-admin-logout', (req, res) => {
   res.append('Set-Cookie', 'local_admin=; Path=/; Max-Age=0');
+  logAudit({
+    actorUsername: 'local',
+    actorUserId: null,
+    actionType: 'LOGOUT',
+    resourceType: 'local_admin',
+    summary: 'local_admin cookie cleared',
+    ipAddress: clientIp(req)
+  }).catch(() => { /* no-op */ });
   res.json({ ok: true });
 });
 
@@ -352,6 +408,15 @@ app.post('/api/sso/users', requireAdmin, async (req, res) => {
       },
       (req as any).adminUserId
     );
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: 'SSO_USER_CREATE',
+      resourceType: 'sso_user',
+      resourceId: u.id,
+      summary: `created SSO user ${u.email} (role=${u.role}, team=${u.team}, enabled=${u.enabled})`,
+      ipAddress: clientIp(req)
+    });
     res.status(201).json({ user: u });
   } catch (e: any) {
     if (e instanceof SsoUserEmailTakenError) return res.status(409).json({ error: e.message });
@@ -381,6 +446,15 @@ app.put('/api/sso/users/:id', requireAdmin, async (req, res) => {
   try {
     const u = await updateSsoUser(id, patch, (req as any).adminUserId);
     if (!u) return res.status(404).json({ error: 'not found' });
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: 'SSO_USER_UPDATE',
+      resourceType: 'sso_user',
+      resourceId: u.id,
+      summary: `updated SSO user ${u.email} (fields=${Object.keys(patch).filter(k => k !== 'updated_at').join(',') || 'none'})`,
+      ipAddress: clientIp(req)
+    });
     res.json({ user: u });
   } catch (e: any) {
     if (e instanceof SsoUserEmailTakenError) return res.status(409).json({ error: e.message });
@@ -392,8 +466,21 @@ app.delete('/api/sso/users/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid id' });
   try {
+    // Capture identifying info BEFORE the row is gone so the audit
+    // record survives the delete. Failure here shouldn't block the
+    // user-facing action, so swallow + log.
+    const before = await getSsoUserById(id);
     const ok = await deleteSsoUser(id);
     if (!ok) return res.status(404).json({ error: 'not found' });
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: 'SSO_USER_DELETE',
+      resourceType: 'sso_user',
+      resourceId: id,
+      summary: `deleted SSO user ${before?.email ?? id} (role=${before?.role ?? 'unknown'})`,
+      ipAddress: clientIp(req)
+    });
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: (e as Error).message });
@@ -508,6 +595,15 @@ app.post('/api/holidays', async (req, res) => {
   try {
     const r = await addHoliday(String(b.date || ''), String(b.name || ''), userId);
     if (!r.ok) return res.status(409).json({ error: r.error });
+    await logAudit({
+      actorUsername: b.userId ? `user:${b.userId}` : 'unknown',
+      actorUserId: userId,
+      actionType: 'HOLIDAY_ADD',
+      resourceType: 'holiday',
+      resourceId: r.holiday?.date ?? String(b.date || ''),
+      summary: `added holiday ${r.holiday?.date ?? b.date} "${r.holiday?.name ?? b.name}"`,
+      ipAddress: clientIp(req)
+    });
     res.status(201).json(r.holiday);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
@@ -515,18 +611,38 @@ app.post('/api/holidays', async (req, res) => {
 });
 
 app.delete('/api/holidays/:date', async (req, res) => {
-  const userId = Number.isFinite((req.body ?? {}).userId) ? Number((req.body ?? {}).userId) : null;
+  const body = req.body ?? {};
+  const userId = Number.isFinite(body.userId) ? Number(body.userId) : null;
   try {
     const r = await removeHoliday(req.params.date, userId);
+    await logAudit({
+      actorUsername: body.userId ? `user:${body.userId}` : 'unknown',
+      actorUserId: userId,
+      actionType: 'HOLIDAY_REMOVE',
+      resourceType: 'holiday',
+      resourceId: req.params.date,
+      summary: `removed holiday ${req.params.date} (source=${r.source})`,
+      ipAddress: clientIp(req)
+    });
     res.json({ ok: true, source: r.source });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
 });
 
-app.post('/api/holidays/reset', async (_req, res) => {
+app.post('/api/holidays/reset', async (req, res) => {
+  const body = req.body ?? {};
+  const userId = Number.isFinite(body.userId) ? Number(body.userId) : null;
   try {
     await resetHolidays();
+    await logAudit({
+      actorUsername: body.userId ? `user:${body.userId}` : 'unknown',
+      actorUserId: userId,
+      actionType: 'HOLIDAY_RESET',
+      resourceType: 'holiday',
+      summary: 'reset holidays to seed (cleared user-added + import rows)',
+      ipAddress: clientIp(req)
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
@@ -553,6 +669,15 @@ app.post('/api/holiday-imports', async (req, res) => {
   if (items.length === 0) return res.status(400).json({ error: 'items is required' });
   try {
     const r = await importHolidays(items, { filename, format, importId }, userId);
+    await logAudit({
+      actorUsername: b.userId ? `user:${b.userId}` : 'unknown',
+      actorUserId: userId,
+      actionType: 'HOLIDAY_IMPORT',
+      resourceType: 'holiday_import',
+      resourceId: importId,
+      summary: `imported ${r.added?.length ?? items.length} holiday(s) from "${filename}" (format=${format}, id=${importId}, replaced=${r.replaced ?? 0}, skipped=${r.skipped?.length ?? 0})`,
+      ipAddress: clientIp(req)
+    });
     res.status(201).json(r);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
@@ -560,8 +685,19 @@ app.post('/api/holiday-imports', async (req, res) => {
 });
 
 app.delete('/api/holiday-imports/:importId', async (req, res) => {
+  const body = req.body ?? {};
+  const userId = Number.isFinite(body.userId) ? Number(body.userId) : null;
   try {
     const n = await removeImport(req.params.importId);
+    await logAudit({
+      actorUsername: body.userId ? `user:${body.userId}` : 'unknown',
+      actorUserId: userId,
+      actionType: 'HOLIDAY_IMPORT_REMOVE',
+      resourceType: 'holiday_import',
+      resourceId: req.params.importId,
+      summary: `removed holiday import ${req.params.importId} (cleared ${n} row(s))`,
+      ipAddress: clientIp(req)
+    });
     res.json({ removed: n });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
@@ -717,4 +853,11 @@ app.listen(PORT, HOST, () => {
   if (!distExists) {
     console.log(`[api] (dev mode — no dist/ found, only API + health served)`);
   }
+  // Boot event — fires once at startup. Surfaces in /admin/system-logs so
+  // operators can correlate "I see an error" with "did the API even boot
+  // in the last hour?". Best-effort: if the table isn't there yet, this
+  // throws and we log to console only.
+  logSystem('INFO', 'api', `server started on ${HOST}:${PORT}`,
+    `distExists=${distExists} db=${process.env.DB_HOST || '192.168.147.103'} node=${process.version}`
+  ).catch(e => console.error('[syslog] boot event failed', e));
 });
