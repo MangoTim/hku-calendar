@@ -4,15 +4,16 @@ import { useState } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Leave } from '../lib/leave';
-import { USERS } from '../lib/data';
 import { fmt, escapeHtml } from '../lib/app';
 
 export function LeaveDetail() {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const { user, ROLE } = useAuth();
+  const { findById } = useUsers();
   const { holidayName } = useHoliday();
   const [, setRev] = useState(0);
   const justCreated = params.get('justCreated') === '1';
@@ -29,7 +30,7 @@ export function LeaveDetail() {
     );
   }
 
-  const person = USERS.find(u => u.id === l.userId);
+  const person = findById(l.userId);
   const meta = Leave.typeMeta(l.type);
   const days = Leave.daysCount(l);
   const startHol = holidayName(l.startDate);
@@ -152,7 +153,7 @@ export function LeaveDetail() {
           ) : (
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {overlap.map(o => {
-                const u = USERS.find(x => x.id === o.userId);
+                const u = findById(o.userId);
                 const om = Leave.typeMeta(o.type);
                 return (
                   <li key={o.id}>

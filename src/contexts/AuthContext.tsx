@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState, useCallback, useMemo, u
 import type { ReactNode } from 'react';
 import { Session, ROLE } from '../lib/app';
 import type { Session as SessionType, User, Role } from '../lib/types';
-import { USERS } from '../lib/data';
+import { UserAdmin } from '../lib/userAdmin';
 import { SsoUsers } from '../lib/api/ssoUsers';
 
 interface AuthCtx {
@@ -50,9 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (row && row.enabled) {
             // Hydrate the local USERS array with fields the DB row has
             // but the bundle doesn't (email, oid) so Session.set carries
-            // them through.
+            // them through. `row` itself carries all the fields we need,
+            // so the seed-array fallback is best-effort.
             const hydrated: User = {
-              ...USERS.find(u => u.id === row.id) ?? row,
+              ...(UserAdmin.byId(row.id) ?? row),
               ...row
             };
             const s = Session.set(hydrated);
@@ -92,7 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         return;
       }
-      const localUser = USERS.find(u => u.id === session.userId);
+      const localUser = UserAdmin.byId(session.userId);
       const wantAdminCookie =
         localUser &&
         (localUser.source === 'LOCAL' || localUser.source === 'DEMO') &&
@@ -125,7 +126,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   const signIn = useCallback((userId: number) => {
-    const user = USERS.find(u => u.id === Number(userId));
+    // UserAdmin.all() covers both the seed array and any LS-created local
+    // users (1000+ ids), so admin-created demo users are also pickable from
+    // the /login picker without colliding with SSO ids 1–21.
+    const user = UserAdmin.byId(Number(userId));
     if (!user || !user.enabled) return null;
     const s = Session.set(user);
     setSession(s);

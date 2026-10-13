@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings, localISO } from '../lib/bookings';
-import { ROOMS, USERS } from '../lib/data';
+import { ROOMS } from '../lib/data';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
 import type { Booking } from '../lib/types';
 
@@ -20,6 +21,7 @@ function getPrefView(): View | null {
 
 export function BookingsPage() {
   const { user, ROLE } = useAuth();
+  const { users } = useUsers();
   const [params, setParams] = useSearchParams();
 
   const initialView = (params.get('view') as View) || getPrefView() || 'month';
@@ -38,8 +40,8 @@ export function BookingsPage() {
   }, [view, anchor, team, setParams]);
 
   const allTeams = useMemo(
-    () => [...new Set(USERS.map(u => u.team))].sort(),
-    []
+    () => [...new Set(users.map(u => u.team))].sort(),
+    [users]
   );
 
   // Active list filtered by team + status
@@ -48,12 +50,12 @@ export function BookingsPage() {
     return all.filter(b => {
       if (b.status === 'CANCELLED') return false;
       if (team !== 'ALL') {
-        const booker = USERS.find(u => u.id === b.bookedById);
+        const booker = users.find(u => u.id === b.bookedById);
         if (!booker || booker.team !== team) return false;
       }
       return true;
     });
-  }, [team]);
+  }, [team, users]);
 
   const bookingsOnDay = (iso: string) =>
     visible.filter(b => b.date === iso)

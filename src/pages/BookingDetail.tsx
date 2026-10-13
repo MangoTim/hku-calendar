@@ -4,9 +4,10 @@ import { useState } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings } from '../lib/bookings';
-import { ROOMS, USERS } from '../lib/data';
+import { ROOMS } from '../lib/data';
 import { fmt, escapeHtml } from '../lib/app';
 
 export function BookingDetail() {
@@ -31,7 +32,8 @@ export function BookingDetail() {
   }
 
   const room = ROOMS.find(r => r.id === b.roomId);
-  const booker = USERS.find(u => u.id === b.bookedById);
+  const { findById } = useUsers();
+  const booker = findById(b.bookedById);
   const canEdit = user!.id === b.bookedById || ROLE.isAdmin();
   const canCancel = canEdit && b.status !== 'CANCELLED';
 

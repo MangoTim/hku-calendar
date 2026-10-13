@@ -4,11 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Leave } from '../lib/leave';
 import { localISO } from '../lib/app';
 import { Bookings } from '../lib/bookings';
-import { USERS } from '../lib/data';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
 import type { Leave as LeaveRec } from '../lib/types';
 
@@ -24,6 +24,7 @@ function getPrefView(): View | null {
 
 export function LeavePage() {
   const { user, ROLE } = useAuth();
+  const { users } = useUsers();
   const [params, setParams] = useSearchParams();
 
   const initialView = (params.get('view') as View) || getPrefView() || 'month';
@@ -43,20 +44,20 @@ export function LeavePage() {
   }, [view, anchor, scope, team, setParams]);
 
   const allTeams = useMemo(
-    () => [...new Set(USERS.map(u => u.team))].sort(),
-    []
+    () => [...new Set(users.map(u => u.team))].sort(),
+    [users]
   );
 
   const visible = useMemo(() => {
     return Leave.all().filter(l => {
       if (l.status === 'CANCELLED') return false;
-      const u = USERS.find(x => x.id === l.userId);
+      const u = users.find(x => x.id === l.userId);
       if (!u) return false;
       if (scope === 'MINE') return l.userId === user!.id;
       if (scope === 'TEAM') return team === 'ALL' ? true : u.team === team;
       return true; // ALL
     });
-  }, [scope, team, user]);
+  }, [scope, team, users, user]);
 
   const leaveOnDay = (iso: string) =>
     visible.filter(l => iso >= l.startDate && iso <= l.endDate);
@@ -309,6 +310,7 @@ function DayGrid({ anchor, leaveOnDay }: {
   leaveOnDay: (iso: string) => LeaveRec[];
 }) {
   const { holidayName } = useHoliday();
+  const { findById } = useUsers();
   const d = new Date(anchor + 'T00:00:00');
   const iso = localISO(d);
   const isToday = iso === todayISO();
@@ -335,7 +337,7 @@ function DayGrid({ anchor, leaveOnDay }: {
             </thead>
             <tbody>
               {dayLeaves.map(l => {
-                const u = USERS.find(x => x.id === l.userId);
+                const u = findById(l.userId);
                 const meta = Leave.typeMeta(l.type);
                 return (
                   <tr key={l.id}>
@@ -366,7 +368,8 @@ function DayGrid({ anchor, leaveOnDay }: {
 
 // ---------------- Shared chip ----------------
 function LeaveChip({ l }: { l: LeaveRec }) {
-  const u = USERS.find(x => x.id === l.userId);
+  const { findById } = useUsers();
+  const u = findById(l.userId);
   const meta = Leave.typeMeta(l.type);
   return (
     <Link

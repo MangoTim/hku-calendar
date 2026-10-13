@@ -11,9 +11,10 @@ import { Link } from 'react-router-dom';
 import { Bookings, localISO } from '../lib/bookings';
 import { Leave } from '../lib/leave';
 import { Tasks } from '../lib/tasks';
-import { ROOMS, USERS } from '../lib/data';
+import { ROOMS } from '../lib/data';
 import { todayISO, escapeHtml } from '../lib/app';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import type { Booking, Leave as LeaveRecord, Task as TaskRecord } from '../lib/types';
 
@@ -234,7 +235,8 @@ function DashBookingChip({ b }: { b: Booking }) {
 }
 
 function DashLeaveChip({ l }: { l: LeaveRecord }) {
-  const u = USERS.find(x => x.id === l.userId);
+  const { findById } = useUsers();
+  const u = findById(l.userId);
   const name = u?.displayName || '—';
   const typeLabel = l.type.charAt(0) + l.type.slice(1).toLowerCase().replace('_', ' ');
   return (

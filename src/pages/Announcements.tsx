@@ -4,8 +4,8 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { Announcements } from '../lib/announcements';
-import { USERS } from '../lib/data';
 import { fmt, escapeHtml } from '../lib/app';
 
 export function AnnouncementsPage() {
@@ -51,7 +51,8 @@ export function AnnouncementsPage() {
 }
 
 function AnnouncementCard({ a }: { a: ReturnType<typeof Announcements.all>[number] }) {
-  const poster = USERS.find(u => u.id === a.postedById);
+  const { findById } = useUsers();
+  const poster = findById(a.postedById);
   return (
     <article className="card">
       <div className="flex" style={{ alignItems: 'baseline', gap: 'var(--space-2)' }}>

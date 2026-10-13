@@ -3,12 +3,13 @@ import { useState, useEffect } from 'react';
 import { Link, useSearchParams, useParams } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { Announcements } from '../lib/announcements';
-import { USERS } from '../lib/data';
 import { fmt, escapeHtml } from '../lib/app';
 
 export function AnnouncementDetail() {
   const { ROLE } = useAuth();
+  const { findById } = useUsers();
   const [params] = useSearchParams();
   const justCreated = params.get('justCreated') === '1';
   const pathParams = useParams<{ id: string }>();
@@ -33,7 +34,7 @@ export function AnnouncementDetail() {
     );
   }
 
-  const poster = USERS.find(u => u.id === a.postedById);
+  const poster = findById(a.postedById);
   const canDelete = ROLE.canAssignTasks();
 
   const onDelete = () => {

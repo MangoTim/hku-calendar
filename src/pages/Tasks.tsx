@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { Tasks } from '../lib/tasks';
-import { USERS } from '../lib/data';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
-import type { Task as TaskRec, TaskStatus, TaskPriority } from '../lib/types';
+import type { Task as TaskRec, TaskStatus, TaskPriority, User } from '../lib/types';
 
 type Scope = 'MINE' | 'TEAM' | 'ALL';
 type View = 'list' | 'cards';
@@ -30,6 +30,7 @@ function loadDefaults(): Partial<Filters> {
 
 export function TasksPage() {
   const { user, ROLE } = useAuth();
+  const { users } = useUsers();
   const [params, setParams] = useSearchParams();
   const saved = useMemo(loadDefaults, []);
 
@@ -60,7 +61,7 @@ export function TasksPage() {
   }, [filters, setParams]);
 
   const allTasks = Tasks.all();
-  const filtered = useMemo(() => applyFilters(allTasks, filters, user!.id), [allTasks, filters, user]);
+  const filtered = useMemo(() => applyFilters(allTasks, filters, users, user!.id), [allTasks, filters, users, user]);
   const counts = useMemo(() => countByStatus(allTasks), [allTasks]);
   const dueSoonCount = useMemo(
     () => Tasks.dueSoon({ userId: filters.scope === 'MINE' ? user!.id : null }).length,
@@ -76,7 +77,7 @@ export function TasksPage() {
   };
 
   const canAssign = ROLE.canAssignTasks();
-  const allTeams = useMemo(() => [...new Set(USERS.map(u => u.team))].sort(), []);
+  const allTeams = useMemo(() => [...new Set(users.map(u => u.team))].sort(), [users]);
 
   return (
     <AppShell title="Tasks">
@@ -202,7 +203,7 @@ export function TasksPage() {
 }
 
 // ---------------- Filter / sort ----------------
-function applyFilters(all: TaskRec[], f: Filters, myUserId: number): TaskRec[] {
+function applyFilters(all: TaskRec[], f: Filters, users: User[], myUserId: number): TaskRec[] {
   const list = all.filter(t => {
     if (f.status === 'OPEN'        && t.status !== 'OPEN') return false;
     if (f.status === 'IN_PROGRESS' && t.status !== 'IN_PROGRESS') return false;
@@ -210,7 +211,7 @@ function applyFilters(all: TaskRec[], f: Filters, myUserId: number): TaskRec[] {
     if (f.priority !== 'ALL' && t.priority !== f.priority) return false;
     if (f.scope === 'MINE' && t.assigneeId !== myUserId) return false;
     if (f.scope === 'TEAM') {
-      const u = USERS.find(x => x.id === t.assigneeId);
+      const u = users.find(x => x.id === t.assigneeId);
       if (!u) return false;
       if (f.team !== 'ALL' && u.team !== f.team) return false;
     }
@@ -247,7 +248,8 @@ function countByStatus(all: TaskRec[]) {
 
 // ---------------- Row + Card ----------------
 function TaskRow({ t }: { t: TaskRec }) {
-  const u = USERS.find(x => x.id === t.assigneeId);
+  const { findById } = useUsers();
+  const u = findById(t.assigneeId);
   const pm = Tasks.priorityMeta(t.priority);
   const sm = Tasks.statusMeta(t.status);
   const today = todayISO();
@@ -280,7 +282,8 @@ function TaskRow({ t }: { t: TaskRec }) {
 }
 
 function TaskCard({ t }: { t: TaskRec }) {
-  const u = USERS.find(x => x.id === t.assigneeId);
+  const { findById } = useUsers();
+  const u = findById(t.assigneeId);
   const pm = Tasks.priorityMeta(t.priority);
   const sm = Tasks.statusMeta(t.status);
   const today = todayISO();

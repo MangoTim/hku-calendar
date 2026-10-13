@@ -4,9 +4,10 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams, useParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Tasks } from '../lib/tasks';
-import { USERS, TASK_SETTINGS } from '../lib/data';
+import { TASK_SETTINGS } from '../lib/data';
 import { escapeHtml, todayISO, addDaysISO } from '../lib/app';
 import type { TaskStatus, TaskPriority } from '../lib/types';
 
@@ -30,6 +31,7 @@ interface FormState {
 
 function TaskForm({ mode }: { mode: 'new' | 'edit' }) {
   const { user, ROLE } = useAuth();
+  const { users } = useUsers();
   const { holidayName } = useHoliday();
   const nav = useNavigate();
   const [params] = useSearchParams();
@@ -206,7 +208,7 @@ function TaskForm({ mode }: { mode: 'new' | 'edit' }) {
             onChange={e => setForm({ ...form, assigneeId: Number(e.target.value) })}
             required
           >
-            {USERS.map(u => (
+            {users.map(u => (
               <option key={u.id} value={u.id}>{u.displayName} ({u.team})</option>
             ))}
           </select>

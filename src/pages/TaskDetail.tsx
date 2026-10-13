@@ -4,9 +4,9 @@ import { useState, useEffect } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Tasks } from '../lib/tasks';
-import { USERS } from '../lib/data';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
 import type { TaskProgress as TaskProgressRec } from '../lib/types';
 
@@ -21,6 +21,7 @@ export function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const { user, ROLE } = useAuth();
+  const { findById } = useUsers();
   const { holidayName } = useHoliday();
   const [, setRev] = useState(0);
   const [flash, setFlash] = useState<Flash | null>(() => {
@@ -48,8 +49,8 @@ export function TaskDetail() {
     );
   }
 
-  const assignee = USERS.find(u => u.id === t.assigneeId);
-  const assigner = USERS.find(u => u.id === t.assignedById);
+  const assignee = findById(t.assigneeId);
+  const assigner = findById(t.assignedById);
   const pm = Tasks.priorityMeta(t.priority);
   const sm = Tasks.statusMeta(t.status);
   const dueHol = t.dueDate ? holidayName(t.dueDate) : null;
@@ -212,7 +213,8 @@ export function TaskDetail() {
 
 // ---------------- Timeline item ----------------
 function TimelineItem({ h }: { h: TaskProgressRec }) {
-  const u = USERS.find(x => x.id === h.updatedById);
+  const { findById } = useUsers();
+  const u = findById(h.updatedById);
   return (
     <li className="timeline__item">
       <div className="timeline__dot"></div>

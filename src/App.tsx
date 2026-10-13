@@ -2,6 +2,7 @@
 // R1: login + dashboard. R2: Bookings. R3: Leave. R4–R5 pending.
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { UsersProvider } from './contexts/UsersContext';
 import { HolidayProvider } from './contexts/HolidayContext';
 import { AppShell } from './components/AppShell';
 import { Login } from './pages/Login';
@@ -70,7 +71,8 @@ function RequireRole({
 export default function App() {
   return (
     <AuthProvider>
-      <HolidayProvider>
+      <UsersProvider>
+        <HolidayProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -217,7 +219,8 @@ export default function App() {
           } />
           </Routes>
         </BrowserRouter>
-      </HolidayProvider>
+        </HolidayProvider>
+      </UsersProvider>
     </AuthProvider>
   );
 }

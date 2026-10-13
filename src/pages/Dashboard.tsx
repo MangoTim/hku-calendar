@@ -1,10 +1,11 @@
 // Dashboard — welcome, upcoming bookings / leave / due-soon tasks / unread / announcements / quick links.
 // Port of static dashboard.html using the same data shapes.
 import { useAuth } from '../contexts/AuthContext';
+import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { AppShell } from '../components/AppShell';
 import {
-  ROOMS, USERS,
+  ROOMS,
   TASK_SETTINGS
 } from '../lib/data';
 import { Tasks } from '../lib/tasks';
@@ -15,11 +16,11 @@ import { Notifications } from '../lib/notifications';
 import { fmt, escapeHtml, todayISO, addDaysISO } from '../lib/app';
 import { DashboardCalendar } from '../components/DashboardCalendar';
 
-const userById = (id: number) => USERS.find(u => u.id === id) || null;
 const roomById = (id: number) => ROOMS.find(r => r.id === id) || null;
 
 export function Dashboard() {
   const { session, user, ROLE } = useAuth();
+  const { findById } = useUsers();
   const { holidayName } = useHoliday();
   if (!session || !user) return null;
 
@@ -234,7 +235,7 @@ export function Dashboard() {
             <a className="btn btn--ghost btn--sm" href="/announcements">View all →</a>
           </div>
           {recent.map(a => {
-            const poster = userById(a.postedById);
+            const poster = findById(a.postedById) || null;
             return (
               <div key={a.id} className="card" style={{ marginTop: 'var(--space-2)', padding: 'var(--space-3)' }}>
                 <div className="flex">

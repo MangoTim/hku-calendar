@@ -10,17 +10,19 @@ import { Announcements } from '../lib/announcements';
 import { Settings } from '../lib/settings';
 import { AuditEvents, SystemLogs, apiHealth } from '../lib/audit';
 import { Db, type ConnectionResult } from '../lib/api/db';
-import { USERS, SSO_CONFIG } from '../lib/data';
+import { SSO_CONFIG } from '../lib/data';
+import { useUsers } from '../contexts/UsersContext';
 
 export function AdminHome() {
+  const { users } = useUsers();
   const totalRooms = Rooms.all().length;
   const activeRooms = Rooms.active().length;
   const totalTasks = Tasks.all().length;
   const totalBookings = Bookings.all().length;
   const totalLeave = Leave.all().length;
   const totalAnnouncements = Announcements.all().length;
-  const totalUsers = USERS.length;
-  const enabledUsers = USERS.filter(u => u.enabled).length;
+  const totalUsers = users.length;
+  const enabledUsers = users.filter(u => u.enabled).length;
 
   const [auditCount, setAuditCount] = useState<number>(0);
   const [logCount, setLogCount] = useState<number>(0);

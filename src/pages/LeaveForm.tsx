@@ -6,7 +6,7 @@ import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Leave } from '../lib/leave';
-import { USERS } from '../lib/data';
+import { useUsers } from '../contexts/UsersContext';
 import { escapeHtml } from '../lib/app';
 import type { LeaveType } from '../lib/types';
 
@@ -28,6 +28,7 @@ interface FormState {
 
 function LeaveForm({ mode }: { mode: 'new' | 'edit' }) {
   const { user } = useAuth();
+  const { users } = useUsers();
   const { holidayName } = useHoliday();
   const nav = useNavigate();
   const [params] = useSearchParams();
@@ -50,7 +51,7 @@ function LeaveForm({ mode }: { mode: 'new' | 'edit' }) {
     ? (editing?.endDate ?? prefStart)
     : (params.get('end') || prefStart);
 
-  const person = USERS.find(u => u.id === prefUserId);
+  const person = users.find(u => u.id === prefUserId);
   const isOther = prefUserId !== user!.id;
 
   const [form, setForm] = useState<FormState>(() => editing
@@ -141,7 +142,7 @@ function LeaveForm({ mode }: { mode: 'new' | 'edit' }) {
             onChange={e => setForm({ ...form, userId: Number(e.target.value) })}
             required
           >
-            {USERS.map(u => (
+            {users.map(u => (
               <option key={u.id} value={u.id}>
                 {u.displayName} ({u.team})
               </option>
