@@ -68,17 +68,20 @@ export function UsersProvider({ children }: { children: ReactNode }) {
 
   const findById = useCallback((id: number | null | undefined): User | undefined => {
     if (id == null) return undefined;
-    // SSO list placed AFTER seed in `users` so the SSO entry wins on a
-    // colliding id — that's the whole point of this context (Tim Wong at
-    // sso_users.id=1 should resolve to the SSO row, not Prof. Alan Wong
-    // at USERS[0].id=1).
-    return users.find(u => u.id === id);
+    // SSO list is placed AFTER seed in `users`. We need findLast() (not
+    // find()) so the SSO entry wins on a colliding id — that's the whole
+    // point of this context (Tim Wong at sso_users.id=1 should resolve to
+    // the SSO row, not Prof. Alan Wong at USERS[0].id=1). find() returns
+    // the FIRST match which would always be the seed row on a collision.
+    return users.findLast(u => u.id === id);
   }, [users]);
 
   const findByEmail = useCallback((email: string | null | undefined): User | undefined => {
     if (!email) return undefined;
     const lower = email.toLowerCase();
-    return users.find(u => (u.email ?? '').toLowerCase() === lower);
+    // Same precedence rule: SSO rows win on email collision (e.g. an admin
+    // re-registers a local user's address under an SSO row).
+    return users.findLast(u => (u.email ?? '').toLowerCase() === lower);
   }, [users]);
 
   const value = useMemo<UsersCtx>(() => ({ users, findById, findByEmail, loading, reload }), [users, findById, findByEmail, loading, reload]);
