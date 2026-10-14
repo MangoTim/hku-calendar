@@ -76,9 +76,14 @@ export function ProfilePage() {
             <tbody>
               <tr><th>Display name</th><td>{escapeHtml(user.displayName)}</td></tr>
               <tr><th>Username</th><td><code>{escapeHtml(user.username)}</code></td></tr>
-              {user.email && (
-                <tr><th>Email</th><td><code>{escapeHtml(user.email)}</code></td></tr>
-              )}
+              <tr>
+                <th>Email</th>
+                <td>
+                  {user.email
+                    ? <code>{escapeHtml(user.email)}</code>
+                    : <span className="text-muted text-sm">— not set —</span>}
+                </td>
+              </tr>
               <tr><th>Title</th><td>{escapeHtml(user.title)}</td></tr>
               <tr><th>Team</th><td>{escapeHtml(user.team)}</td></tr>
               <tr><th>Role</th><td><span className="badge badge--info">{fmt.role(user.role)}</span></td></tr>
