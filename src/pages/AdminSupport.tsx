@@ -178,6 +178,23 @@ export function AdminSupport() {
     }
   };
 
+  // Track the sample snapshot used for the most recent successful render
+  // so we can show "preview is out of date" if the admin keeps typing.
+  const [previewRenderedSample, setPreviewRenderedSample] = useState<ItSupportPreviewPayload | null>(null);
+
+  // Stable JSON serialization for the "is the live sample different from what
+  // we last rendered?" comparison. Object identity alone isn't enough — a
+  // new { ...sample } object is created on every keystroke but only differs
+  // when an actual field changed.
+  const sampleKey = JSON.stringify(sample);
+  const renderedKey = previewRenderedSample ? JSON.stringify(previewRenderedSample) : null;
+  const previewIsStale = previewRenderedSample !== null && sampleKey !== renderedKey;
+
+  // Once auto-render has been turned on, debounced re-renders happen on every
+  // sample edit. Kept off until the first template load completes so we
+  // don't double-render during boot.
+  const [autoRenderEnabled, setAutoRenderEnabled] = useState(false);
+
   const onPreview = async () => {
     if (!active) return;
     setPreviewing(true);
@@ -185,12 +202,34 @@ export function AdminSupport() {
     try {
       const r = await EmailApi.previewTemplate(active.code, sample);
       setPreview(r);
+      setPreviewRenderedSample(sample);
     } catch (e: any) {
       setError(e?.message || 'Preview failed.');
     } finally {
       setPreviewing(false);
     }
   };
+
+  // Auto-render preview when the sample changes (debounced). Cancels any
+  // in-flight debounce when the admin switches templates or keeps typing.
+  useEffect(() => {
+    if (!active || !autoRenderEnabled) return;
+    const handle = setTimeout(() => {
+      onPreview();
+    }, 400);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sample, active?.code, autoRenderEnabled]);
+
+  // Re-render when the active template changes (the body that gets
+  // substituted into changes too — even if the sample fields are the same).
+  // Also flips auto-render on so subsequent edits keep updating live.
+  useEffect(() => {
+    if (!active) return;
+    setAutoRenderEnabled(true);
+    onPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.code]);
 
   const onReset = () => {
     if (!active) return;
@@ -602,11 +641,27 @@ export function AdminSupport() {
       {/* ---- Preview pane ---- */}
       {active && (
         <section className="card" style={{ marginTop: 'var(--space-3)' }}>
-          <h2 style={{ marginTop: 0 }}>Preview</h2>
+          <div className="page-header" style={{ marginBottom: 'var(--space-3)' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Preview</h2>
+              <div className="text-muted text-sm" style={{ marginTop: 4 }}>
+                Auto-updates as you edit the Sample booking fields. Nothing here sends anything — it's the same
+                renderer the production send uses, fed the screenshot bundle.
+              </div>
+            </div>
+            <div className="page-header__actions">
+              {previewing && <span className="badge badge--info">⟳ Rendering…</span>}
+              {!previewing && preview && previewIsStale && (
+                <span className="badge badge--warning">⚠ stale — editing…</span>
+              )}
+              {!previewing && preview && !previewIsStale && (
+                <span className="badge badge--success">✓ up to date</span>
+              )}
+            </div>
+          </div>
           {!preview ? (
             <div className="empty">
-              Edit the <strong>Sample booking</strong> fields above and click <strong>Render preview with these
-              values</strong> to see how the template looks for those inputs. Nothing here sends anything.
+              Edit the <strong>Sample booking</strong> fields above and the preview will render automatically.
             </div>
           ) : (
             <>
