@@ -96,7 +96,14 @@ export const TEMPLATE_VARIABLES: ReadonlyArray<{ name: string; description: stri
   { name: 'supportRequests', description: 'Free-text IT support request (may be empty)' },
   { name: 'bookerName',      description: 'Display name of the user who made the booking' },
   { name: 'bookerEmail',     description: 'Email of the booker (Reply-To target)' },
-  { name: 'bookerTeam',      description: 'Team of the booker' }
+  { name: 'bookerTeam',      description: 'Team of the booker' },
+  // ---- LEAVE_DIGEST / WEEKLY_LEAVE_REPORT (RFQ §2(c)) ----
+  { name: 'displayName',     description: 'Display name of the recipient (LEAVE_DIGEST, WEEKLY_LEAVE_REPORT)' },
+  { name: 'team',            description: "Recipient's team (LEAVE_DIGEST)" },
+  { name: 'totalBookings',   description: 'Count of bookings in the digest period (LEAVE_DIGEST)' },
+  { name: 'totalLeave',      description: 'Count of leave records in the digest period (LEAVE_DIGEST, WEEKLY_LEAVE_REPORT)' },
+  { name: 'fromDate',        description: 'Start date of the report window YYYY-MM-DD (WEEKLY_LEAVE_REPORT)' },
+  { name: 'toDate',          description: 'End date of the report window YYYY-MM-DD (WEEKLY_LEAVE_REPORT)' }
 ];
 
 // ---------- helpers ----------

@@ -173,6 +173,89 @@ async function ensureSchema(): Promise<void> {
     );
     INSERT INTO app_config (key, value) VALUES ('IT_TEAM_EMAIL', '')
       ON CONFLICT (key) DO NOTHING;
+    -- Daily + weekly leave digest schedule (RFQ §2(c)). The hour is a
+    -- 0-23 integer stored as text (matches the existing app_config pattern).
+    -- Admins edit on /admin/email. The scheduler re-reads every tick so
+    -- changes take effect on the next run.
+    --
+    -- LEAVE_DIGEST_DEFAULT_RECIPIENT: fallback recipient used when no
+    -- user has the relevant Profile preference enabled. Lets the demo
+    -- deliver a digest to a known mailbox even before any user has
+    -- toggled their preferences on, so the feature can be verified
+    -- without configuring SSO opt-in. Admins can clear or change it on
+    -- /admin/email.
+    INSERT INTO app_config (key, value) VALUES
+        ('LEAVE_DIGEST_ENABLED',                  'true'),
+        ('LEAVE_DIGEST_HOUR',                     '8'),
+        ('WEEKLY_LEAVE_REPORT_HOUR',             '8'),
+        ('LEAVE_DIGEST_DEFAULT_RECIPIENT',        'tim.wong@rainbowtech.com.hk')
+      ON CONFLICT (key) DO NOTHING;
+
+    -- leave_records — mirror of the FE localStorage leave. The FE books
+    -- the save to localStorage first, then POSTs a mirror here. The
+    -- scheduler reads from this table to compose the daily + weekly
+    -- digest so emails fire even when no browser is open. PRIMARY KEY
+    -- is (user_source, id) because seed LOCAL/DEMO users (1-21) and
+    -- sso_users (1-N) share an id namespace; the source disambiguates.
+    CREATE TABLE IF NOT EXISTS leave_records (
+      user_id       INTEGER      NOT NULL,
+      user_source   TEXT         NOT NULL CHECK (user_source IN ('LOCAL','DEMO','SSO')),
+      type          TEXT         NOT NULL CHECK (type IN ('ANNUAL','SICK','UNPAID','MATERNITY','PATERNITY','COMPASSIONATE','STUDY')),
+      start_date    DATE         NOT NULL,
+      end_date      DATE         NOT NULL,
+      note          TEXT         NOT NULL DEFAULT '',
+      status        TEXT         NOT NULL DEFAULT 'APPROVED' CHECK (status IN ('APPROVED','CANCELLED')),
+      team          TEXT         NOT NULL DEFAULT '',
+      display_name  TEXT         NOT NULL DEFAULT '',
+      created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_source, user_id, start_date, type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_leave_records_team  ON leave_records (team);
+    CREATE INDEX IF NOT EXISTS idx_leave_records_dates ON leave_records (start_date, end_date);
+
+    -- booking_records — same idea. ref (e.g. RB-0017) is the natural
+    -- primary key because the FE generates it from a counter at save time
+    -- and uses it everywhere as the booking handle.
+    CREATE TABLE IF NOT EXISTS booking_records (
+      ref                TEXT         PRIMARY KEY,
+      room_id            INTEGER      NOT NULL,
+      room_name          TEXT         NOT NULL DEFAULT '',
+      booked_by_id       INTEGER      NOT NULL,
+      booked_by_source   TEXT         NOT NULL CHECK (booked_by_source IN ('LOCAL','DEMO','SSO')),
+      booked_by_name     TEXT         NOT NULL,
+      booked_by_email    TEXT         NOT NULL DEFAULT '',
+      booked_by_team     TEXT         NOT NULL DEFAULT '',
+      date               DATE         NOT NULL,
+      start_time         TEXT         NOT NULL,
+      end_time           TEXT         NOT NULL,
+      purpose            TEXT         NOT NULL DEFAULT '',
+      status             TEXT         NOT NULL DEFAULT 'CONFIRMED' CHECK (status IN ('CONFIRMED','CANCELLED')),
+      support_requests   TEXT         NOT NULL DEFAULT '',
+      it_support         BOOLEAN      NOT NULL DEFAULT FALSE,
+      team               TEXT         NOT NULL DEFAULT '',
+      created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_booking_records_date     ON booking_records (date);
+    CREATE INDEX IF NOT EXISTS idx_booking_records_team     ON booking_records (team);
+    CREATE INDEX IF NOT EXISTS idx_booking_records_booked_by ON booking_records (booked_by_source, booked_by_id);
+
+    -- digest_runs — idempotency log for the scheduler. Each scheduler
+    -- tick INSERTs (job_name, run_date) ON CONFLICT DO NOTHING; if the
+    -- insert returns 0 rows, the (job, day) was already claimed (e.g.
+    -- by a manual-trigger run) and we bail. The row is updated at the
+    -- end with finished_at + status + recipients_count.
+    CREATE TABLE IF NOT EXISTS digest_runs (
+      job_name         TEXT         NOT NULL,
+      run_date         DATE         NOT NULL,
+      started_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      finished_at      TIMESTAMPTZ,
+      status           TEXT         NOT NULL DEFAULT 'STARTED' CHECK (status IN ('STARTED','OK','EMPTY','FAILED')),
+      recipients_count INTEGER      NOT NULL DEFAULT 0,
+      error            TEXT         NOT NULL DEFAULT '',
+      PRIMARY KEY (job_name, run_date)
+    );
 
     -- Id-rebase: keep sso_users.id out of the seed USERS range (1-21) so
     -- the FE's findById lookup can never collide with a seed row by
@@ -352,6 +435,82 @@ async function seedIfEmpty(): Promise<void> {
         'Reply to this email to contact the booker directly.'
       ].join('\n'),
       'Sent to the IT team address when a booking is saved with "Request IT support" ticked. Variables in {{double braces}} are substituted at send time.'
+    ]
+  );
+
+  // LEAVE_DIGEST — sent to opted-in users each morning at the configured
+  // hour summarising TODAY's bookings + leave for THEIR team.
+  await pool!.query(
+    `INSERT INTO email_templates (code, subject, body_text, description)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (code) DO UPDATE
+       SET subject     = COALESCE(NULLIF(email_templates.subject, ''), EXCLUDED.subject),
+           body_text   = COALESCE(NULLIF(email_templates.body_text, ''), EXCLUDED.body_text),
+           description = COALESCE(NULLIF(email_templates.description, ''), EXCLUDED.description),
+           updated_at  = NOW()`,
+    [
+      'LEAVE_DIGEST',
+      '[ENGG Intranet] {{team}} digest — {{date}} ({{totalBookings}} bookings, {{totalLeave}} on leave)',
+      [
+        'Good morning, {{displayName}}.',
+        '',
+        'Here is your {{team}} team digest for {{date}}.',
+        '',
+        'Bookings today ({{totalBookings}})',
+        '{{#each teamReservations}}',
+        '  {{startTime}}–{{endTime}} · {{room}} · {{bookerName}}{{#if purpose}} — {{purpose}}{{/if}}',
+        '{{/each}}',
+        '{{#unless teamReservations}}',
+        '  (none)',
+        '{{/unless}}',
+        '',
+        'Leave today ({{totalLeave}})',
+        '{{#each teamLeave}}',
+        '  {{displayName}} — {{type}}{{#if note}} ({{note}}){{/if}}',
+        '{{/each}}',
+        '{{#unless teamLeave}}',
+        '  (no one on leave today)',
+        '{{/unless}}',
+        '',
+        'Reply to this email if anything looks wrong.',
+        '— ENGG Intranet'
+      ].join('\n'),
+      'Daily 08:00 (configurable on /admin/email) — per-team summary of today\'s bookings + leave. Sent to users who enabled the "Morning team digest" toggle in Profile. Falls back to LEAVE_DIGEST_DEFAULT_RECIPIENT when no one is opted in.'
+    ]
+  );
+
+  // WEEKLY_LEAVE_REPORT — Monday-morning, org-wide forward-looking 14 days.
+  await pool!.query(
+    `INSERT INTO email_templates (code, subject, body_text, description)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (code) DO UPDATE
+       SET subject     = COALESCE(NULLIF(email_templates.subject, ''), EXCLUDED.subject),
+           body_text   = COALESCE(NULLIF(email_templates.body_text, ''), EXCLUDED.body_text),
+           description = COALESCE(NULLIF(email_templates.description, ''), EXCLUDED.description),
+           updated_at  = NOW()`,
+    [
+      'WEEKLY_LEAVE_REPORT',
+      '[ENGG Intranet] Next 14 days of leave — {{fromDate}} → {{toDate}} ({{totalLeave}} total)',
+      [
+        'Good morning, {{displayName}}.',
+        '',
+        'Forward-looking leave report for the next 14 days',
+        '({{fromDate}} → {{toDate}}) across all teams.',
+        '',
+        '{{#each leaveByDate}}',
+        '{{date}} ({{count}})',
+        '{{#each entries}}',
+        '  {{displayName}} ({{team}}) — {{type}}{{#if note}} ({{note}}){{/if}}',
+        '{{/each}}',
+        '{{/each}}',
+        '{{#unless leaveByDate}}',
+        '  No leave planned in the next 14 days.',
+        '{{/unless}}',
+        '',
+        'Reply to this email if anything looks wrong.',
+        '— ENGG Intranet'
+      ].join('\n'),
+      'Weekly Monday-morning (configurable on /admin/email) — org-wide forward 14-day leave calendar. Sent to users who enabled the "Monday two-week leave report" toggle in Profile. Falls back to LEAVE_DIGEST_DEFAULT_RECIPIENT when no one is opted in.'
     ]
   );
 }

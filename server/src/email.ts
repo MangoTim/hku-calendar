@@ -211,3 +211,103 @@ function escapeHtmlInline(s: string): string {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]!));
 }
+
+// ============================================================================
+// Leave digest senders (RFQ §2(c) — daily + weekly leave report via email)
+//
+// Two flavours:
+//   - sendLeaveDigest: per-team, today-only, sent to opted-in users
+//   - sendWeeklyLeaveReport: org-wide, next 14 days, sent on Mondays
+//
+// Both load the matching email_templates code, render {{vars}}, and call
+// sendMail(). Iterating over a block (the {{#each x}}{{/list}} pattern
+// in the templates) is handled by the caller in server/src/digest.ts —
+// it builds a stringified summary and passes it through one of the
+// {{teamReservations}} / {{teamLeave}} / {{leaveByDate}} variables, so
+// the simple regex-based renderTemplate stays unchanged.
+//
+// The IT support sender above uses the same loadTemplate() pattern; the
+// digest variants are kept separate so each can call its own template
+// code without having to thread the code through every caller.
+// ============================================================================
+
+export interface DailyDigestPayload {
+  to: string;
+  displayName: string;
+  team: string;
+  date: string;                // YYYY-MM-DD
+  totalBookings: number;
+  totalLeave: number;
+  /** Plain-text, already-formatted multi-line list. The template drops
+   *  this straight into the {{teamReservations}} block. Empty string
+   *  when there are no bookings — the template says "(none)". */
+  teamReservations: string;
+  /** Plain-text list of leave entries. The template drops this into the
+   *  {{teamLeave}} block. Empty string when none. */
+  teamLeave: string;
+}
+
+/** Send the daily team digest. Loads `LEAVE_DIGEST` from email_templates
+ *  (falling back to a built-in default) and sends via sendMail(). */
+export async function sendLeaveDigest(p: DailyDigestPayload): Promise<{ messageId: string }> {
+  const tmpl = await loadDigestTemplate('LEAVE_DIGEST');
+  const subject = renderTemplate(tmpl.subject, {
+    team: p.team, date: p.date,
+    totalBookings: String(p.totalBookings), totalLeave: String(p.totalLeave)
+  });
+  const baseVars = {
+    displayName:   p.displayName,
+    team:          p.team,
+    date:          p.date,
+    totalBookings: String(p.totalBookings),
+    totalLeave:    String(p.totalLeave),
+    teamReservations: p.teamReservations || '(none)',
+    teamLeave:        p.teamLeave        || '(no one on leave today)'
+  };
+  const text = renderTemplate(tmpl.bodyText, baseVars);
+  const html = tmpl.bodyHtml ? renderTemplate(tmpl.bodyHtml, baseVars) : textToHtml(text);
+  return sendMail({ to: p.to, subject, text, html });
+}
+
+export interface WeeklyLeavePayload {
+  to: string;
+  displayName: string;
+  fromDate: string;            // YYYY-MM-DD inclusive
+  toDate: string;              // YYYY-MM-DD inclusive
+  totalLeave: number;
+  /** Pre-formatted multi-line body grouped by date. The template drops
+   *  this straight into the {{leaveByDate}} block. */
+  leaveByDate: string;
+}
+
+export async function sendWeeklyLeaveReport(p: WeeklyLeavePayload): Promise<{ messageId: string }> {
+  const tmpl = await loadDigestTemplate('WEEKLY_LEAVE_REPORT');
+  const subject = renderTemplate(tmpl.subject, {
+    fromDate: p.fromDate, toDate: p.toDate, totalLeave: String(p.totalLeave)
+  });
+  const baseVars = {
+    displayName: p.displayName,
+    fromDate:    p.fromDate,
+    toDate:      p.toDate,
+    totalLeave:  String(p.totalLeave),
+    leaveByDate: p.leaveByDate || '  (No leave planned in the next 14 days.)'
+  };
+  const text = renderTemplate(tmpl.bodyText, baseVars);
+  const html = tmpl.bodyHtml ? renderTemplate(tmpl.bodyHtml, baseVars) : textToHtml(text);
+  return sendMail({ to: p.to, subject, text, html });
+}
+
+async function loadDigestTemplate(code: 'LEAVE_DIGEST' | 'WEEKLY_LEAVE_REPORT'): Promise<EmailTemplate> {
+  try {
+    const t = await getEmailTemplate(code);
+    if (t && t.bodyText && t.subject) return t;
+  } catch { /* fall through to default */ }
+  return {
+    code,
+    subject: `[ENGG Intranet] ${code}`,
+    bodyText: 'Digest for {{displayName}} — {{date}}\n{{payload}}',
+    bodyHtml: null,
+    description: 'Built-in default (DB template missing)',
+    updatedAt: new Date(0).toISOString()
+  };
+}

@@ -48,6 +48,8 @@ import type { SsoDbUser } from './ssoUsers.ts';
 import type { HolidayFormat } from '../../src/lib/types.ts';
 import * as jose from 'jose';
 import { logAudit, logSystem } from './audit.ts';
+import { startScheduler } from './scheduler.ts';
+import { runLeaveDigest, runWeeklyLeaveReport, lastRun, type DigestJob } from './digest.ts';
 
 const PORT = Number(process.env.PORT || 8092);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -1058,6 +1060,311 @@ app.put('/api/email/config', requireAdmin, async (req, res) => {
   }
 });
 
+// ----- Leave digest (RFQ §2(c)) -----
+// Schedule is owned by server/src/scheduler.ts. These endpoints let the
+// admin UI inspect the most-recent run and trigger an immediate run for
+// "today" / "this week" — useful for QA + for catching up after a
+// server outage. Idempotency inside runLeaveDigest/runWeeklyLeaveReport
+// means a manual trigger that lands on the same (job, run_date) as an
+// already-fired run returns `skipped: 'already-ran'` rather than
+// double-sending.
+
+// Schedule config — exposed so /admin/email can edit the hours.
+app.get('/api/email/digest-config', requireAdmin, async (_req, res) => {
+  try {
+    const enabled = await getConfigValue('LEAVE_DIGEST_ENABLED').catch(() => 'true');
+    const dailyHour = await getConfigValue('LEAVE_DIGEST_HOUR').catch(() => '8');
+    const weeklyHour = await getConfigValue('WEEKLY_LEAVE_REPORT_HOUR').catch(() => '8');
+    const defaultRecipient = await getConfigValue('LEAVE_DIGEST_DEFAULT_RECIPIENT').catch(() => '');
+    res.json({
+      enabled: enabled !== 'false',
+      dailyHour: clamp(parseInt(String(dailyHour ?? '8'), 10), 0, 23, 8),
+      weeklyHour: clamp(parseInt(String(weeklyHour ?? '8'), 10), 0, 23, 8),
+      defaultRecipient: defaultRecipient || ''
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.put('/api/email/digest-config', requireAdmin, async (req, res) => {
+  const b = req.body ?? {};
+  const enabled = b.enabled === false ? 'false' : 'true';
+  const dailyHour = String(clamp(Number(b.dailyHour), 0, 23, 8));
+  const weeklyHour = String(clamp(Number(b.weeklyHour), 0, 23, 8));
+  const defaultRecipient = String(b.defaultRecipient || '').trim();
+  if (defaultRecipient && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(defaultRecipient)) {
+    return res.status(400).json({ error: 'defaultRecipient must be a valid email or empty' });
+  }
+  try {
+    await setConfigValue('LEAVE_DIGEST_ENABLED', enabled, (req as any).adminUserId);
+    await setConfigValue('LEAVE_DIGEST_HOUR', dailyHour, (req as any).adminUserId);
+    await setConfigValue('WEEKLY_LEAVE_REPORT_HOUR', weeklyHour, (req as any).adminUserId);
+    await setConfigValue('LEAVE_DIGEST_DEFAULT_RECIPIENT', defaultRecipient, (req as any).adminUserId);
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: 'EMAIL_DIGEST_CONFIG_UPDATE',
+      resourceType: 'app_config',
+      resourceId: 'LEAVE_DIGEST_*',
+      summary: `digest-config enabled=${enabled} dailyHour=${dailyHour} weeklyHour=${weeklyHour} defaultRecipient="${defaultRecipient}"`,
+      ipAddress: clientIp(req)
+    });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Last-run introspection — used by /admin/email to show the "last
+// sent at" row without querying digest_runs directly.
+app.get('/api/email/digest-last-run', requireAdmin, async (_req, res) => {
+  try {
+    const [daily, weekly] = await Promise.all([
+      lastRun('DAILY_LEAVE_DIGEST'),
+      lastRun('WEEKLY_LEAVE_REPORT')
+    ]);
+    res.json({ daily, weekly });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Manual-trigger endpoints. The schedule also fires these on a timer,
+// but admins can run them ad-hoc for QA / outage recovery. The body is
+// optional `{ "now": "ISO8601" }` — defaults to the server's current
+// time. The result includes `skipped: 'already-ran'` when the
+// idempotency PK already exists for that (job, run_date).
+app.post('/api/email/run-digest', requireAdmin, async (req, res) => {
+  const now = parseNow(req.body);
+  try {
+    const r = await runLeaveDigest(now);
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: r.skipped ? 'EMAIL_DIGEST_MANUAL_SKIPPED' : (r.ok ? 'EMAIL_DIGEST_MANUAL_OK' : 'EMAIL_DIGEST_MANUAL_FAILED'),
+      resourceType: 'digest_runs',
+      resourceId: r.runDate,
+      summary: `manual daily digest run: recipients=${r.recipients}${r.skipped ? ` skipped=${r.skipped}` : ''}${r.error ? ` error="${r.error}"` : ''}`,
+      ipAddress: clientIp(req),
+      success: r.ok
+    });
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+app.post('/api/email/run-weekly', requireAdmin, async (req, res) => {
+  const now = parseNow(req.body);
+  try {
+    const r = await runWeeklyLeaveReport(now);
+    await logAudit({
+      actorUsername: String((req as any).adminUsername || `admin:${(req as any).adminUserId}`),
+      actorUserId: (req as any).adminUserId,
+      actionType: r.skipped ? 'EMAIL_DIGEST_MANUAL_SKIPPED' : (r.ok ? 'EMAIL_DIGEST_MANUAL_OK' : 'EMAIL_DIGEST_MANUAL_FAILED'),
+      resourceType: 'digest_runs',
+      resourceId: r.runDate,
+      summary: `manual weekly digest run: recipients=${r.recipients}${r.skipped ? ` skipped=${r.skipped}` : ''}${r.error ? ` error="${r.error}"` : ''}`,
+      ipAddress: clientIp(req),
+      success: r.ok
+    });
+    res.json(r);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// ----- Leave mirror (FE → DB) -----
+// Best-effort: the FE writes to LS first, then POSTs here so the
+// scheduler has fresh data for the digest. No auth — the FE is already
+// inside a session. Returns 200 with { ok: true } even on the no-op
+// path so the FE doesn't have to care about the mirror drift; the
+// server logs drift warnings to system_logs separately.
+app.post('/api/leave', async (req, res) => {
+  const b = req.body ?? {};
+  const user_source = String(b.user_source || '');
+  const user_id = Number(b.user_id);
+  if (!Number.isFinite(user_id) || !['LOCAL','DEMO','SSO'].includes(user_source)) {
+    return res.status(400).json({ error: 'user_source must be LOCAL|DEMO|SSO and user_id required' });
+  }
+  const type = String(b.type || '');
+  if (!['ANNUAL','SICK','UNPAID','MATERNITY','PATERNITY','COMPASSIONATE','STUDY'].includes(type)) {
+    return res.status(400).json({ error: 'unknown leave type' });
+  }
+  const start = String(b.start_date || '');
+  const end   = String(b.end_date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return res.status(400).json({ error: 'start_date and end_date must be YYYY-MM-DD' });
+  }
+  const status = String(b.status || 'APPROVED');
+  try {
+    await getPool().query(
+      `INSERT INTO leave_records (user_source, user_id, type, start_date, end_date, note, status, team, display_name, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+       ON CONFLICT (user_source, user_id, start_date, type)
+       DO UPDATE SET end_date = EXCLUDED.end_date,
+                     note     = EXCLUDED.note,
+                     status   = EXCLUDED.status,
+                     team     = EXCLUDED.team,
+                     display_name = EXCLUDED.display_name,
+                     updated_at = NOW()`,
+      [
+        user_source, user_id, type, start, end,
+        String(b.note || ''),
+        ['APPROVED','CANCELLED'].includes(status) ? status : 'APPROVED',
+        String(b.team || ''),
+        String(b.display_name || '')
+      ]
+    );
+    res.json({ ok: true });
+  } catch (e: any) {
+    logSystem('WARN', 'mirror', `leave mirror insert failed for user_id=${user_id}`,
+      (e as Error).message).catch(() => {});
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// Cancel a leave record. Uses the same composite key as POST so the FE
+// doesn't have to remember a separate server id.
+app.delete('/api/leave', async (req, res) => {
+  const b = req.body ?? {};
+  const user_source = String(b.user_source || '');
+  const user_id = Number(b.user_id);
+  const start = String(b.start_date || '');
+  const type = String(b.type || '');
+  if (!Number.isFinite(user_id) || !start || !type) {
+    return res.status(400).json({ error: 'user_source, user_id, start_date, type required' });
+  }
+  try {
+    await getPool().query(
+      `UPDATE leave_records SET status = 'CANCELLED', updated_at = NOW()
+        WHERE user_source = $1 AND user_id = $2 AND start_date = $3 AND type = $4`,
+      [user_source, user_id, start, type]
+    );
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+app.get('/api/leave', async (req, res) => {
+  try {
+    const r = await getPool().query(
+      `SELECT user_source, user_id, type, start_date::text, end_date::text,
+              note, status, team, display_name
+         FROM leave_records
+         WHERE status = 'APPROVED'
+         ORDER BY start_date ASC`
+    );
+    res.json({ records: r.rows });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ----- Booking mirror -----
+app.post('/api/bookings', async (req, res) => {
+  const b = req.body ?? {};
+  const ref = String(b.ref || '').trim();
+  if (!ref) return res.status(400).json({ error: 'ref required' });
+  const booked_by_source = String(b.booked_by_source || '');
+  if (!['LOCAL','DEMO','SSO'].includes(booked_by_source)) {
+    return res.status(400).json({ error: 'booked_by_source must be LOCAL|DEMO|SSO' });
+  }
+  const date = String(b.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  try {
+    await getPool().query(
+      `INSERT INTO booking_records
+         (ref, room_id, room_name, booked_by_id, booked_by_source,
+          booked_by_name, booked_by_email, booked_by_team,
+          date, start_time, end_time, purpose, status, support_requests,
+          it_support, team, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
+       ON CONFLICT (ref) DO UPDATE
+         SET room_id      = EXCLUDED.room_id,
+             room_name    = EXCLUDED.room_name,
+             date         = EXCLUDED.date,
+             start_time   = EXCLUDED.start_time,
+             end_time     = EXCLUDED.end_time,
+             purpose      = EXCLUDED.purpose,
+             status       = EXCLUDED.status,
+             support_requests = EXCLUDED.support_requests,
+             it_support   = EXCLUDED.it_support,
+             team         = EXCLUDED.team,
+             updated_at   = NOW()`,
+      [
+        ref,
+        Number(b.room_id || 0),
+        String(b.room_name || ''),
+        Number(b.booked_by_id || 0),
+        booked_by_source,
+        String(b.booked_by_name || ''),
+        String(b.booked_by_email || ''),
+        String(b.booked_by_team || ''),
+        date,
+        String(b.start_time || ''),
+        String(b.end_time || ''),
+        String(b.purpose || ''),
+        ['CONFIRMED','CANCELLED'].includes(String(b.status || '')) ? String(b.status) : 'CONFIRMED',
+        String(b.support_requests || ''),
+        Boolean(b.it_support),
+        String(b.team || '')
+      ]
+    );
+    res.json({ ok: true });
+  } catch (e: any) {
+    logSystem('WARN', 'mirror', `booking mirror upsert failed for ref=${ref}`,
+      (e as Error).message).catch(() => {});
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+app.delete('/api/bookings/:ref', async (req, res) => {
+  const ref = String(req.params.ref || '');
+  if (!ref) return res.status(400).json({ error: 'ref required' });
+  try {
+    await getPool().query(
+      `UPDATE booking_records SET status = 'CANCELLED', updated_at = NOW() WHERE ref = $1`,
+      [ref]
+    );
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+app.get('/api/bookings', async (_req, res) => {
+  try {
+    const r = await getPool().query(
+      `SELECT ref, room_id, room_name, booked_by_id, booked_by_source,
+              booked_by_name, booked_by_email, booked_by_team,
+              date::text, start_time, end_time, status, support_requests,
+              it_support, team
+         FROM booking_records
+         WHERE status = 'CONFIRMED'
+         ORDER BY date ASC, start_time ASC`
+    );
+    res.json({ records: r.rows });
+  } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ----- helpers -----
+function clamp(n: number, lo: number, hi: number, fallback: number): number {
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.floor(n)));
+}
+
+function parseNow(body: any): Date {
+  const s = String((body ?? {}).now || '').trim();
+  if (!s) return new Date();
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? new Date() : d;
+}
+
 // ----- DB inspector (read-only) -----
 // Demo: no auth at the API layer. The frontend gates /admin/database on
 // ROLE.isAdmin() via <RequireRole>. Production would enforce ADMIN from a
@@ -1214,4 +1521,8 @@ app.listen(PORT, HOST, () => {
   logSystem('INFO', 'api', `server started on ${HOST}:${PORT}`,
     `distExists=${distExists} db=${process.env.DB_HOST || '192.168.147.103'} node=${process.version}`
   ).catch(e => console.error('[syslog] boot event failed', e));
+
+  // Start the leave-digest scheduler (RFQ §2(c)). It owns its own
+  // SIGTERM/SIGINT handlers; no further setup needed here.
+  startScheduler();
 });
