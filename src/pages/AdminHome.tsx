@@ -72,6 +72,7 @@ export function AdminHome() {
           <Link className="btn" to="/admin/audit">📜 Audit trail</Link>
           <Link className="btn" to="/admin/system-logs">🧾 System logs</Link>
           <Link className="btn" to="/admin/support">🛎️ IT support templates</Link>
+          <Link className="btn" to="/admin/email">📧 Email & digests</Link>
         </div>
       </section>
 

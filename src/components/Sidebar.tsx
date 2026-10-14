@@ -25,7 +25,8 @@ const ADMIN_ITEMS: NavItem[] = [
   { to: '/admin/backup',       label: 'Backup',         icon: '💾' },
   { to: '/admin/holidays',     label: 'Holidays',       icon: '🗓️' },
   { to: '/admin/task-settings',label: 'Task settings',  icon: '⏱️' },
-  { to: '/admin/support',      label: 'IT support',     icon: '🛎️' }
+  { to: '/admin/support',      label: 'IT support',     icon: '🛎️' },
+  { to: '/admin/email',        label: 'Email & digests', icon: '📧' }
 ];
 
 const AUDIT_ITEMS: NavItem[] = [

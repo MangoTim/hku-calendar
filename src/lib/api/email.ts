@@ -79,5 +79,60 @@ export const EmailApi = {
     jsonFetch(`/api/email/templates/${encodeURIComponent(code)}/preview`, {
       method: 'POST',
       body: JSON.stringify(payload)
+    }),
+  // Admin digest (RFQ §2(c) — leave digests)
+  getDigestConfig: (): Promise<DigestConfig> =>
+    jsonFetch<DigestConfig>('/api/email/digest-config'),
+  updateDigestConfig: (input: DigestConfigInput): Promise<{ ok: true }> =>
+    jsonFetch('/api/email/digest-config', {
+      method: 'PUT',
+      body: JSON.stringify(input)
+    }),
+  lastDigestRun: (): Promise<{ daily: DigestRunSummary | null; weekly: DigestRunSummary | null }> =>
+    jsonFetch('/api/email/digest-last-run'),
+  runDailyDigest: (now?: string): Promise<DigestRunResult> =>
+    jsonFetch<DigestRunResult>('/api/email/run-digest', {
+      method: 'POST',
+      body: JSON.stringify({ now })
+    }),
+  runWeeklyDigest: (now?: string): Promise<DigestRunResult> =>
+    jsonFetch<DigestRunResult>('/api/email/run-weekly', {
+      method: 'POST',
+      body: JSON.stringify({ now })
     })
 };
+
+// ---- Digest config / run shapes ----
+
+export interface DigestConfig {
+  enabled: boolean;
+  dailyHour: number;        // 0–23 (UTC)
+  weeklyHour: number;       // 0–23 (UTC)
+  defaultRecipient: string;
+}
+
+export interface DigestConfigInput {
+  enabled: boolean;
+  dailyHour: number;
+  weeklyHour: number;
+  defaultRecipient?: string;
+}
+
+export interface DigestRunSummary {
+  run_date: string;
+  status: 'STARTED' | 'OK' | 'EMPTY' | 'FAILED';
+  finished_at: string | null;
+  recipients_count: number;
+  error: string;
+}
+
+export interface DigestRunResult {
+  ok: boolean;
+  job: 'DAILY_LEAVE_DIGEST' | 'WEEKLY_LEAVE_REPORT';
+  runDate: string;
+  skipped?: 'already-ran';
+  recipients: number;
+  startedAt: string;
+  finishedAt: string;
+  error?: string;
+}

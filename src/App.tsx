@@ -35,6 +35,7 @@ import { AdminBackup } from './pages/AdminBackup';
 import { AdminAudit } from './pages/AdminAudit';
 import { AdminSystemLogs } from './pages/AdminSystemLogs';
 import { AdminSupport } from './pages/AdminSupport';
+import { AdminEmail } from './pages/AdminEmail';
 import { ROLE } from './lib/app';
 
 function Placeholder({ title, body }: { title: string; body: string }) {
@@ -205,6 +206,11 @@ export default function App() {
           <Route path="/admin/support" element={
             <RequireRole allow={() => ROLE.isAdmin()}>
               <AdminSupport />
+            </RequireRole>
+          } />
+          <Route path="/admin/email" element={
+            <RequireRole allow={() => ROLE.isAdmin()}>
+              <AdminEmail />
             </RequireRole>
           } />
 

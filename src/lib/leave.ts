@@ -4,6 +4,7 @@ import type { Leave as LeaveRecord, LeaveType } from './types';
 import { LEAVE, USERS } from './data';
 import { localISO, todayISO, isPast, fmt } from './app';
 import { Bookings } from './bookings';
+import { LeaveMirror } from './api/leave';
 
 const LS_KEY = 'engg_user_leave';
 
@@ -70,6 +71,14 @@ export const Leave = {
     };
     list.push(full);
     persistUserLeave(list);
+    void LeaveMirror.upsert({
+      userId: full.userId,
+      type: full.type,
+      startDate: full.startDate,
+      endDate: full.endDate,
+      note: full.note,
+      status: 'APPROVED'
+    });
     return full;
   },
   update(id: number | string, patch: Partial<LeaveRecord>): LeaveRecord | null {
@@ -87,10 +96,25 @@ export const Leave = {
       userList.push(updated);
     }
     persistUserLeave(userList);
+    const s = updated.status === 'CANCELLED' ? 'CANCELLED' : 'APPROVED';
+    void LeaveMirror.upsert({
+      userId: updated.userId,
+      type: updated.type,
+      startDate: updated.startDate,
+      endDate: updated.endDate,
+      note: updated.note,
+      status: s
+    });
     return updated;
   },
   cancel(id: number | string): LeaveRecord | null {
-    return this.update(id, { status: 'CANCELLED' });
+    const updated = this.update(id, { status: 'CANCELLED' });
+    if (updated) void LeaveMirror.cancel({
+      userId: updated.userId,
+      type: updated.type,
+      startDate: updated.startDate
+    });
+    return updated;
   },
 
   // ---------------- Validation ----------------

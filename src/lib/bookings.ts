@@ -3,6 +3,7 @@
 import type { Booking } from './types';
 import { BOOKINGS, ROOMS, USERS } from './data';
 import { todayISO, isPast, localISO } from './app';
+import { BookingMirror } from './api/bookings';
 
 const LS_KEY = 'engg_user_bookings';
 
@@ -57,6 +58,7 @@ export const Bookings = {
     };
     list.push(full);
     persistUserBookings(list);
+    void BookingMirror.upsert(full);
     return full;
   },
   update(id: number | string, patch: Partial<Booking>): Booking | null {
@@ -74,10 +76,13 @@ export const Bookings = {
       userList.push(updated);
     }
     persistUserBookings(userList);
+    void BookingMirror.upsert(updated);
     return updated;
   },
   cancel(id: number | string): Booking | null {
-    return this.update(id, { status: 'CANCELLED' });
+    const updated = this.update(id, { status: 'CANCELLED' });
+    if (updated) void BookingMirror.cancel(updated.ref);
+    return updated;
   },
 
   // ---------------- Validation ----------------
