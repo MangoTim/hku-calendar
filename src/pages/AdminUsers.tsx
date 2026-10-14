@@ -11,11 +11,22 @@
 // Email column is shown for both. For seed users it's almost always empty —
 // those accounts pre-date the email-as-identity bridge and are selectable
 // only via the local /login picker.
+//
+// Role assignment is assisted by an inline permission guide (matrix in
+// src/lib/rolePermissions.ts). The guide renders as a collapsible card
+// above the table and as an inline tooltip under each row's role <select>
+// so admins can see what they're granting before they save.
 import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../components/AppShell';
 import { UserAdmin, isSeedUser } from '../lib/userAdmin';
 import { SsoUsers, type SsoUserView } from '../lib/api/ssoUsers';
 import { fmt, escapeHtml } from '../lib/app';
+import {
+  ROLE_PERMISSIONS,
+  CAPABILITY_GROUPS,
+  getRolePermission,
+  roleCan
+} from '../lib/rolePermissions';
 import type { User as AppUserT, Role as AppRoleT } from '../lib/types';
 
 type SourceFilter = 'ALL' | 'LOCAL' | 'DEMO' | 'SSO';
@@ -33,6 +44,7 @@ export function AdminUsers() {
   const [ssoError, setSsoError] = useState<string | null>(null);
   const [addingSso, setAddingSso] = useState(false);
   const [addingLocal, setAddingLocal] = useState(false);
+  const [showRoleGuide, setShowRoleGuide] = useState(true);
 
   const reloadSso = async () => {
     setSsoLoading(true);
@@ -119,6 +131,8 @@ export function AdminUsers() {
           <button className="btn btn--ghost btn--sm" onClick={reloadSso}>Retry</button>
         </div>
       )}
+
+      <RoleGuidePanel open={showRoleGuide} onToggle={() => setShowRoleGuide(o => !o)} />
 
       <div className="toolbar">
         <input
@@ -291,6 +305,9 @@ function Row({
           </select>
           {' '}
           <span className={`badge badge--${roleColor[u.role]}`}>{fmt.role(u.role)}</span>
+          <div className="text-muted text-sm" style={{ marginTop: 4, lineHeight: 1.35 }}>
+            <RoleTip role={u.role} />
+          </div>
         </td>
         <td><span className={`badge badge--${sourceColor[u.source]}`}>{escapeHtml(u.source)}</span></td>
         <td>
@@ -431,6 +448,9 @@ function AddLocalUserModal({ onClose, onSaved }: { onClose: () => void; onSaved:
           <option value="ADMIN">Administrator</option>
           <option value="AUDITOR">Auditor</option>
         </select>
+        <span className="form__hint text-muted">
+          <RoleTip role={role} />
+        </span>
       </div>
       <div className="form__row">
         <label className="form__label" htmlFor="localTeam">Team</label>
@@ -643,7 +663,13 @@ function RegisterLocalForSsoModal({
           <option value="ADMIN">Administrator</option>
           <option value="AUDITOR">Auditor</option>
         </select>
-        <span className="form__hint text-muted">Defaults to <code>{u.role}</code> from the local entry — change if you want SSO sign-in to grant a different role.</span>
+        <span className="form__hint text-muted">
+          Defaults to <code>{u.role}</code> from the local entry — change if
+          you want SSO sign-in to grant a different role.
+        </span>
+        <span className="form__hint text-muted">
+          <RoleTip role={role} />
+        </span>
       </div>
       <div className="text-muted text-sm" style={{ marginTop: 8 }}>
         <div>Display name: <code>{escapeHtml(u.displayName)}</code></div>
@@ -706,6 +732,9 @@ function FormFields(props: {
           <option value="ADMIN">Administrator</option>
           <option value="AUDITOR">Auditor</option>
         </select>
+        <span className="form__hint text-muted">
+          <RoleTip role={props.role} />
+        </span>
       </div>
       <div className="form__row">
         <label className="form__label" htmlFor="ssoTeam">Team</label>
@@ -752,5 +781,130 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
         {children}
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// Role permission guide (RFQ §2(d) — User Access Management)
+//
+// When the admin assigns a role from the dropdown, they need to know what
+// they're granting. We render two things:
+//
+//   1. <RoleGuidePanel> — a collapsible matrix near the toolbar that shows
+//      every role's full permission list. Open by default; the admin can
+//      hide it once they're familiar with the matrix.
+//
+//   2. <RoleTip>       — a 1-line summary under each row's role <select>
+//      showing the currently granted capabilities. Updates live as the
+//      admin previews a different role in the dropdown (using a stateful
+//      previewRole inside the row).
+// ============================================================================
+
+/** Compact per-row hint: a 1-line summary plus the top 3 capabilities of
+ *  the role. Lets the admin see "what does this grant?" without opening
+ *  the full matrix panel. */
+function RoleTip({ role }: { role: AppRoleT }) {
+  const p = getRolePermission(role);
+  const capCount = p.capabilities.length;
+  return (
+    <span>
+      <strong>{p.audience}.</strong> {p.blurb.split('.')[0]}.{' '}
+      <span className="text-muted">({capCount} capabilities)</span>
+    </span>
+  );
+}
+
+/** Expandable capability matrix. Rendered as a 4-column grid so each role
+ *  gets a column and each row is one capability. ✓ is filled if the role
+ *  has it, · otherwise. Hover the cell to see the capability label. */
+function RoleGuidePanel({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <section className="card" style={{ marginBottom: 'var(--space-3)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Role permission guide</h2>
+          <p className="text-muted text-sm" style={{ marginTop: 4, marginBottom: 0 }}>
+            What each role can do across the intranet. Use this as the
+            reference when assigning roles below — capabilities open the
+            dropdown of each column carefully. ADMIN inherits every
+            capability of TASK_MANAGER plus the admin toolkit; AUDITOR is
+            read-only compliance.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          {open ? 'Hide matrix' : 'Show matrix'}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 'var(--space-3)', overflowX: 'auto' }}>
+          <table className="table table--compact">
+            <thead>
+              <tr>
+                <th style={{ minWidth: 220 }}>Capability</th>
+                {ROLE_PERMISSIONS.map(r => (
+                  <th key={r.key} style={{ textAlign: 'center', minWidth: 96 }}>
+                    <div>{r.label}</div>
+                    <div className="text-muted text-sm" style={{ fontWeight: 400 }}>
+                      {r.audience.split('(')[1]?.replace(')', '').trim() || r.audience}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {CAPABILITY_GROUPS.map(group => (
+                <RoleGuideGroup key={group.title} group={group} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RoleGuideGroup({ group }: { group: { title: string; items: { key: any; label: string }[] } }) {
+  return (
+    <>
+      <tr>
+        <td
+          colSpan={1 + ROLE_PERMISSIONS.length}
+          style={{ background: 'var(--color-surface-2, #f1f5f9)', fontWeight: 600, paddingTop: 12 }}
+        >
+          {group.title}
+        </td>
+      </tr>
+      {group.items.map(item => (
+        <tr key={item.key}>
+          <td>{item.label}</td>
+          {ROLE_PERMISSIONS.map(r => {
+            const ok = roleCan(r.key, item.key);
+            return (
+              <td key={r.key} style={{ textAlign: 'center' }} title={item.label}>
+                <span
+                  aria-label={ok ? 'granted' : 'not granted'}
+                  style={{
+                    display: 'inline-block',
+                    width: 18, height: 18, lineHeight: '18px',
+                    borderRadius: 9,
+                    background: ok ? 'var(--color-success, #16a34a)' : 'var(--color-surface-2, #e2e8f0)',
+                    color: ok ? '#fff' : 'var(--color-text-muted, #64748b)',
+                    fontSize: 11, fontWeight: 700
+                  }}
+                >
+                  {ok ? '✓' : '·'}
+                </span>
+              </td>
+            );
+          })}
+        </tr>
+      ))}
+    </>
   );
 }

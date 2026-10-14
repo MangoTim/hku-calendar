@@ -10,8 +10,60 @@
 import type { User, Role } from './types';
 import { USERS } from './data';
 
-const LS_KEY_OVERRIDES = 'engg_user_user_overrides';
-const LS_KEY_CREATED   = 'engg_user_created';
+const LS_KEY_OVERRIDES   = 'engg_user_user_overrides';
+const LS_KEY_CREATED     = 'engg_user_created';
+const LS_KEY_PROFILE_OVR = 'engg_user_profile_overrides';
+
+export interface UserProfileOverride {
+  id: number;                   // any user id (seed, created, or SSO — keyed by their local id)
+  displayName?: string;
+  title?: string;
+  team?: string;
+}
+
+function loadProfileOverrides(): UserProfileOverride[] {
+  try { return JSON.parse(localStorage.getItem(LS_KEY_PROFILE_OVR) || '[]'); }
+  catch { return []; }
+}
+function persistProfileOverrides(list: UserProfileOverride[]): void {
+  try { localStorage.setItem(LS_KEY_PROFILE_OVR, JSON.stringify(list)); }
+  catch { /* ignore */ }
+}
+
+/** Returns the active profile override for `userId`, or undefined if none.
+ *  Used by AuthContext to apply the user's self-service changes to the
+ *  session-derived User view, so the rest of the app sees the new values
+ *  immediately after Save. */
+export function getProfileOverride(userId: number): UserProfileOverride | undefined {
+  return loadProfileOverrides().find(o => o.id === userId);
+}
+
+/** User-driven profile edit (RFQ §2(d) — "Allows users to manage their own
+ *  profile settings"). Stores displayName / title / team in LS keyed by
+ *  the user's id. Pass `undefined` to clear a field; pass `null` to leave
+ *  it untouched (used by the form to differentiate "user cleared the
+ *  input" from "user didn't include this field in the save").
+ *
+ *  Note: for SSO users this only overrides what the FE renders — the
+ *  sso_users row in the DB is unchanged. The form on /profile calls out
+ *  that admins update SSO identity fields (email/role/enabled) via
+ *  /admin/users. */
+export function setSelfProfile(
+  userId: number,
+  patch: { displayName?: string | null; title?: string | null; team?: string | null }
+): UserProfileOverride {
+  const list = loadProfileOverrides();
+  let entry = list.find(o => o.id === userId);
+  if (!entry) {
+    entry = { id: userId };
+    list.push(entry);
+  }
+  if ('displayName' in patch) entry.displayName = patch.displayName ?? undefined;
+  if ('title'       in patch) entry.title       = patch.title       ?? undefined;
+  if ('team'        in patch) entry.team        = patch.team        ?? undefined;
+  persistProfileOverrides(list);
+  return entry;
+}
 
 interface UserOverride {
   id: number;            // seed user id

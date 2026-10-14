@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState, useCallback, useMemo, u
 import type { ReactNode } from 'react';
 import { Session, ROLE } from '../lib/app';
 import type { Session as SessionType, User, Role } from '../lib/types';
-import { UserAdmin } from '../lib/userAdmin';
+import { UserAdmin, getProfileOverride } from '../lib/userAdmin';
 import { SsoUsers } from '../lib/api/ssoUsers';
 
 interface AuthCtx {
@@ -150,7 +150,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return roles.includes(session.role);
   }, [session]);
 
-  const value = useMemo<AuthCtx>(() => ({
+  const value = useMemo<AuthCtx>(() => {
+    // Profile overrides — RFQ §2(d): users manage their own profile
+    // settings (displayName/title/team) via /profile. We store these in
+    // LS keyed by user.id and apply them on top of the session-derived
+    // User view so every page reflects the latest edit without a reload.
+    const profileOverride = session ? getProfileOverride(session.userId) : undefined;
+    return {
     session,
     // Derive the User view from the session fields directly instead of
     // re-looking-up `session.userId` in USERS. SSO `sso_users` rows use
@@ -164,10 +170,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user: session ? {
       id: session.userId,
       username: session.username,
-      displayName: session.displayName,
+      displayName: profileOverride?.displayName ?? session.displayName,
       role: session.role,
-      team: session.team,
-      title: session.title,
+      team: profileOverride?.team ?? session.team,
+      title: profileOverride?.title ?? session.title,
       source: session.source,
       email: session.email,
       enabled: true,
@@ -178,7 +184,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signOut,
     hasRole,
     ROLE
-  }), [session, signIn, signOut, hasRole]);
+    };
+  }, [session, signIn, signOut, hasRole]);
 
   // During SSO bootstrap, render a small placeholder instead of children.
   // This prevents RequireAuth from evaluating `session` as null on the
