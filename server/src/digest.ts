@@ -221,9 +221,26 @@ export async function runWeeklyLeaveReport(now: Date = new Date()): Promise<RunD
 // query against the user-prefs table joined to sso_users.
 async function recipientForJob(_job: DigestJob): Promise<{ email: string; display_name: string; team: string } | null> {
   const fallback = (await getConfigValue('LEAVE_DIGEST_DEFAULT_RECIPIENT').catch(() => null)) || '';
-  const email = fallback.trim();
+  const email = fallback.trim().toLowerCase();
   if (!email) return null;
-  return { email, display_name: 'ENGG Intranet', team: 'all teams' };
+  // Best-effort: look the recipient up in sso_users by email. If the
+  // row exists we get a real display name + team; otherwise we derive
+  // a friendly name from the local part of the email (e.g.
+  // "tim.wong" → "Tim Wong") so the greeting reads naturally.
+  try {
+    const { findSsoUserByEmail } = await import('./ssoUsers.ts');
+    const u = await findSsoUserByEmail(email);
+    if (u && u.enabled) {
+      return { email, display_name: u.displayName, team: u.team || 'ENGG Intranet' };
+    }
+  } catch { /* fall through to local-part fallback */ }
+  const local = email.split('@')[0] || '';
+  const derived = local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map(s => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+    .join(' ') || 'there';
+  return { email, display_name: derived, team: 'ENGG Intranet' };
 }
 
 // ---------------------------------------------------------------------------

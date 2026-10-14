@@ -440,6 +440,12 @@ async function seedIfEmpty(): Promise<void> {
 
   // LEAVE_DIGEST — sent to opted-in users each morning at the configured
   // hour summarising TODAY's bookings + leave for THEIR team.
+  //
+  // Body uses simple `{{var}}` substitution (see emailTemplates.ts#renderTemplate).
+  // digest.ts builds the per-row text for {{teamReservations}} and
+  // {{teamLeave}} before substitution, so no block-helper engine is
+  // required. Empty cases fall back to "(none)" / "(no one on leave
+  // today)" in email.ts#sendLeaveDigest.
   await pool!.query(
     `INSERT INTO email_templates (code, subject, body_text, description)
      VALUES ($1, $2, $3, $4)
@@ -457,20 +463,10 @@ async function seedIfEmpty(): Promise<void> {
         'Here is your {{team}} team digest for {{date}}.',
         '',
         'Bookings today ({{totalBookings}})',
-        '{{#each teamReservations}}',
-        '  {{startTime}}–{{endTime}} · {{room}} · {{bookerName}}{{#if purpose}} — {{purpose}}{{/if}}',
-        '{{/each}}',
-        '{{#unless teamReservations}}',
-        '  (none)',
-        '{{/unless}}',
+        '{{teamReservations}}',
         '',
         'Leave today ({{totalLeave}})',
-        '{{#each teamLeave}}',
-        '  {{displayName}} — {{type}}{{#if note}} ({{note}}){{/if}}',
-        '{{/each}}',
-        '{{#unless teamLeave}}',
-        '  (no one on leave today)',
-        '{{/unless}}',
+        '{{teamLeave}}',
         '',
         'Reply to this email if anything looks wrong.',
         '— ENGG Intranet'
@@ -480,6 +476,8 @@ async function seedIfEmpty(): Promise<void> {
   );
 
   // WEEKLY_LEAVE_REPORT — Monday-morning, org-wide forward-looking 14 days.
+  // Same `{{var}}`-only contract: {{leaveByDate}} is the pre-formatted
+  // multi-line block built by digest.ts#loadWeeklyLeaveData.
   await pool!.query(
     `INSERT INTO email_templates (code, subject, body_text, description)
      VALUES ($1, $2, $3, $4)
@@ -497,15 +495,7 @@ async function seedIfEmpty(): Promise<void> {
         'Forward-looking leave report for the next 14 days',
         '({{fromDate}} → {{toDate}}) across all teams.',
         '',
-        '{{#each leaveByDate}}',
-        '{{date}} ({{count}})',
-        '{{#each entries}}',
-        '  {{displayName}} ({{team}}) — {{type}}{{#if note}} ({{note}}){{/if}}',
-        '{{/each}}',
-        '{{/each}}',
-        '{{#unless leaveByDate}}',
-        '  No leave planned in the next 14 days.',
-        '{{/unless}}',
+        '{{leaveByDate}}',
         '',
         'Reply to this email if anything looks wrong.',
         '— ENGG Intranet'
