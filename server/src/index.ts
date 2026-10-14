@@ -44,6 +44,7 @@ import {
   deleteSsoUser,
   SsoUserEmailTakenError
 } from './ssoUsers.ts';
+import type { SsoDbUser } from './ssoUsers.ts';
 import type { HolidayFormat } from '../../src/lib/types.ts';
 import * as jose from 'jose';
 import { logAudit, logSystem } from './audit.ts';
@@ -484,6 +485,82 @@ app.delete('/api/sso/users/:id', requireAdmin, async (req, res) => {
     });
     res.json({ ok: true });
   } catch (e: any) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Self-service profile update (RFQ §2(d) — users manage their own profile
+// settings, including email). Unlike `/api/sso/users/:id` (admin-only),
+// this is open to the row's owner: any signed-in SSO user can update
+// their own displayName / title / team / email. role, enabled, and
+// username stay admin-only because they're trust/audit concerns, not
+// user preferences.
+//
+// Identity check: the cookie must be `sso_session` (not `local_admin`)
+// because local-admin only exists for ADMIN-role LOCAL/DEMO seed users —
+// they don't have an `sso_users` row to update. LOCAL/DEMO non-admin
+// users fall through to 403 with a hint to ask an admin.
+app.put('/api/sso/users/me', async (req, res) => {
+  const ssoToken = await readSsoSessionToken(req);
+  if (!ssoToken) {
+    return res.status(401).json({ error: 'SSO sign-in required to update your own profile' });
+  }
+  let email = '';
+  try {
+    const v = await jose.jwtVerify(ssoToken, COOKIE_SECRET, { algorithms: ['HS256'] });
+    email = String((v.payload as any)?.email || '').toLowerCase();
+  } catch {
+    return res.status(401).json({ error: 'invalid SSO session' });
+  }
+  if (!email) return res.status(401).json({ error: 'invalid SSO session' });
+
+  let me: SsoDbUser | null = null;
+  try {
+    me = await findSsoUserByEmail(email);
+  } catch (e: any) {
+    return res.status(500).json({ error: (e as Error).message });
+  }
+  if (!me || !me.enabled) return res.status(403).json({ error: 'SSO account not active' });
+
+  const b = req.body ?? {};
+  const patch: any = {};
+  if (b.email !== undefined) {
+    const e = String(b.email).trim();
+    if (!e) return res.status(400).json({ error: 'email cannot be empty' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return res.status(400).json({ error: 'valid email required' });
+    patch.email = e;
+  }
+  if (b.displayName !== undefined) {
+    const n = String(b.displayName).trim();
+    if (!n) return res.status(400).json({ error: 'displayName cannot be empty' });
+    patch.displayName = n;
+  }
+  if (b.team !== undefined)  patch.team  = String(b.team).trim();
+  if (b.title !== undefined) patch.title = String(b.title).trim();
+
+  // Reject role/enabled/username — those are admin-only.
+  for (const adminOnly of ['role', 'enabled', 'username']) {
+    if (b[adminOnly] !== undefined) {
+      return res.status(403).json({ error: `${adminOnly} is admin-only; cannot be changed via /me` });
+    }
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'no fields to update' });
+
+  try {
+    const updated = await updateSsoUser(me.id, patch, me.id);
+    if (!updated) return res.status(404).json({ error: 'not found' });
+    await logAudit({
+      actorUsername: updated.email,
+      actorUserId: updated.id,
+      actionType: 'SSO_USER_SELF_UPDATE',
+      resourceType: 'sso_user',
+      resourceId: updated.id,
+      summary: `self-update SSO user ${updated.email} (fields=${Object.keys(patch).join(',')})`,
+      ipAddress: clientIp(req)
+    });
+    res.json({ user: updated });
+  } catch (e: any) {
+    if (e instanceof SsoUserEmailTakenError) return res.status(409).json({ error: e.message });
     res.status(500).json({ error: (e as Error).message });
   }
 });

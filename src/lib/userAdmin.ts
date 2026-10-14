@@ -19,6 +19,7 @@ export interface UserProfileOverride {
   displayName?: string;
   title?: string;
   team?: string;
+  email?: string;               // for LOCAL/DEMO users only; SSO emails persist via /api/sso/users/me
 }
 
 function loadProfileOverrides(): UserProfileOverride[] {
@@ -39,18 +40,24 @@ export function getProfileOverride(userId: number): UserProfileOverride | undefi
 }
 
 /** User-driven profile edit (RFQ §2(d) — "Allows users to manage their own
- *  profile settings"). Stores displayName / title / team in LS keyed by
- *  the user's id. Pass `undefined` to clear a field; pass `null` to leave
- *  it untouched (used by the form to differentiate "user cleared the
- *  input" from "user didn't include this field in the save").
+ *  profile settings"). Stores displayName / title / team / email in LS
+ *  keyed by the user's id. Pass `undefined` to leave a field untouched;
+ *  pass `null` to clear it (used by the form to differentiate "user
+ *  cleared the input" from "user didn't include this field in the
+ *  save").
  *
- *  Note: for SSO users this only overrides what the FE renders — the
- *  sso_users row in the DB is unchanged. The form on /profile calls out
- *  that admins update SSO identity fields (email/role/enabled) via
- *  /admin/users. */
+ *  Note: for SSO users the email is persisted separately via
+ *  /api/sso/users/me — this helper's `email` field is only effective
+ *  for LOCAL/DEMO users (no DB row to update). The form on /profile
+ *  branches by `user.source` and calls the right path. */
 export function setSelfProfile(
   userId: number,
-  patch: { displayName?: string | null; title?: string | null; team?: string | null }
+  patch: {
+    displayName?: string | null;
+    title?: string | null;
+    team?: string | null;
+    email?: string | null;
+  }
 ): UserProfileOverride {
   const list = loadProfileOverrides();
   let entry = list.find(o => o.id === userId);
@@ -61,6 +68,7 @@ export function setSelfProfile(
   if ('displayName' in patch) entry.displayName = patch.displayName ?? undefined;
   if ('title'       in patch) entry.title       = patch.title       ?? undefined;
   if ('team'        in patch) entry.team        = patch.team        ?? undefined;
+  if ('email'       in patch) entry.email       = patch.email       ?? undefined;
   persistProfileOverrides(list);
   return entry;
 }

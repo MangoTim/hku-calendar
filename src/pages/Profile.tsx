@@ -12,6 +12,7 @@ import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
 import { fmt, escapeHtml, Session } from '../lib/app';
 import { getProfileOverride, setSelfProfile } from '../lib/userAdmin';
+import { SsoUsers } from '../lib/api/ssoUsers';
 import type { User } from '../lib/types';
 
 const LS_KEY_USER_OVERRIDES = 'engg_user_user_overrides';
@@ -99,8 +100,8 @@ export function ProfilePage() {
             </tbody>
           </table>
           <p className="text-muted text-sm" style={{ marginTop: 'var(--space-3)' }}>
-            Your email is the identity anchor used for SSO sign-in. Ask an administrator
-            on the <Link to="/admin/users">Users admin page</Link> to update it.
+            Role, source, and enabled status are managed by administrators on
+            the <Link to="/admin/users">Users admin page</Link>.
           </p>
         </section>
 
@@ -173,8 +174,10 @@ function ProfileEditor({ user, onSaved }: { user: User; onSaved: () => void }) {
   const [displayName, setDisplayName] = useState<string>(override?.displayName ?? user.displayName);
   const [title, setTitle] = useState<string>(override?.title ?? user.title);
   const [team, setTeam] = useState<string>(override?.team ?? user.team);
+  const [email, setEmail] = useState<string>(override?.email ?? user.email ?? '');
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // If the user changes (sign-out / sign-in as a different account), reset
   // the form to that user's stored values. Without this the form would
@@ -185,45 +188,85 @@ function ProfileEditor({ user, onSaved }: { user: User; onSaved: () => void }) {
     setDisplayName(o?.displayName ?? user.displayName);
     setTitle(o?.title ?? user.title);
     setTeam(o?.team ?? user.team);
+    setEmail(o?.email ?? user.email ?? '');
     setSavedAt(null);
     setErr(null);
-  }, [user.id, user.displayName, user.title, user.team]);
+  }, [user.id, user.displayName, user.title, user.team, user.email]);
+
+  const emailValid = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const trimmedEmail = email.trim();
 
   const dirty =
     (displayName.trim() !== (override?.displayName ?? user.displayName)) ||
     (title.trim()       !== (override?.title       ?? user.title)) ||
-    (team.trim()        !== (override?.team        ?? user.team));
+    (team.trim()        !== (override?.team        ?? user.team)) ||
+    (trimmedEmail       !== (override?.email       ?? (user.email ?? '')));
 
-  const valid = displayName.trim().length > 0 && team.trim().length > 0;
+  const valid = displayName.trim().length > 0 && team.trim().length > 0 && emailValid;
 
-  const onSubmit = (e: React.FormEvent) => {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!valid) return;
+    if (!valid || saving) return;
+    setSaving(true);
     setErr(null);
     try {
-      setSelfProfile(user.id, {
-        displayName: displayName.trim(),
-        title:       title.trim(),
-        team:        team.trim()
-      });
-      // Refresh the session so the rest of the app sees the new name/team.
-      // Session.set is built from a User object; we keep the original
-      // session fields (id/role/source/email) and update the user-visible
-      // ones, then trigger the storage listener AuthContext subscribes to
-      // so React state picks up the change without a reload.
-      const next: User = {
-        ...user,
-        displayName: displayName.trim(),
-        title: title.trim(),
-        team: team.trim()
-      };
-      Session.set(next);
-      // storage events don't fire in the same tab — manually nudge.
+      // SSO users: persist to DB via /api/sso/users/me so the Azure
+      // callback's email match stays in sync. LOCAL/DEMO users have no
+      // server row to mutate, so the email (and the other fields) just
+      // go into the LS override.
+      if (user.source === 'SSO') {
+        const next: User = {
+          ...user,
+          displayName: displayName.trim(),
+          title: title.trim(),
+          team: team.trim(),
+          email: trimmedEmail
+        };
+        try {
+          const { user: updated } = await SsoUsers.updateMe({
+            displayName: displayName.trim(),
+            title: title.trim(),
+            team: team.trim(),
+            email: trimmedEmail
+          });
+          // Pick up server-side fields (e.g. oid) too.
+          next.email = updated.email;
+          next.displayName = updated.displayName;
+          next.title = updated.title;
+          next.team = updated.team;
+          if (updated.oid) next.oid = updated.oid;
+        } catch (apiErr: any) {
+          const msg = (apiErr as Error)?.message || 'Failed to save';
+          setErr(/409|already/i.test(msg)
+            ? `Email "${trimmedEmail}" is already registered. Use the email that matches your Microsoft Entra identity.`
+            : msg);
+          setSaving(false);
+          return;
+        }
+        Session.set(next);
+      } else {
+        // LOCAL/DEMO — LS-only override.
+        setSelfProfile(user.id, {
+          displayName: displayName.trim(),
+          title:       title.trim(),
+          team:        team.trim(),
+          email:       trimmedEmail
+        });
+        Session.set({
+          ...user,
+          displayName: displayName.trim(),
+          title: title.trim(),
+          team: team.trim(),
+          email: trimmedEmail
+        });
+      }
       window.dispatchEvent(new StorageEvent('storage', { key: 'engg_intranet_session' }));
       setSavedAt(new Date().toISOString());
       onSaved();
     } catch (e: any) {
       setErr((e as Error)?.message || 'Failed to save');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -232,6 +275,7 @@ function ProfileEditor({ user, onSaved }: { user: User; onSaved: () => void }) {
     setDisplayName(o?.displayName ?? user.displayName);
     setTitle(o?.title ?? user.title);
     setTeam(o?.team ?? user.team);
+    setEmail(o?.email ?? user.email ?? '');
     setSavedAt(null);
     setErr(null);
   };
@@ -294,18 +338,33 @@ function ProfileEditor({ user, onSaved }: { user: User; onSaved: () => void }) {
           </div>
 
           <div className="form__row">
-            <label className="form__label">Email</label>
+            <label className="form__label" htmlFor="profileEmail">
+              Email
+              {user.source === 'SSO' && (
+                <span className="text-muted text-sm" style={{ marginLeft: 6, fontWeight: 400 }}>
+                  · saved to Microsoft Entra identity
+                </span>
+              )}
+            </label>
             <input
+              id="profileEmail"
               className="form__input"
-              value={user.email || ''}
-              readOnly
-              aria-readonly="true"
-              placeholder="(not set)"
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="name@rainbowtech.com.hk"
+              autoComplete="email"
+              maxLength={128}
             />
             <span className="form__hint text-muted">
               {user.source === 'SSO'
-                ? 'Anchored to your Microsoft Entra identity. An admin can change it on the Users admin page.'
-                : 'Read-only here. An admin can change it on the Users admin page.'}
+                ? 'Must match your Microsoft Entra identity — this is what the SSO callback uses to match you.'
+                : 'Used by the FE so other staff can find you in people pickers. Optional.'}
+              {!emailValid && (
+                <span style={{ color: 'var(--color-danger)', marginLeft: 8 }}>
+                  Looks like an invalid email.
+                </span>
+              )}
             </span>
           </div>
         </div>
@@ -317,20 +376,20 @@ function ProfileEditor({ user, onSaved }: { user: User; onSaved: () => void }) {
         )}
 
         <div className="btn-row" style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <button type="submit" className="btn" disabled={!valid || !dirty}>
-            Save
+          <button type="submit" className="btn" disabled={!valid || !dirty || saving}>
+            {saving ? 'Saving…' : 'Save'}
           </button>
-          <button type="button" className="btn btn--ghost" onClick={onReset} disabled={!dirty}>
+          <button type="button" className="btn btn--ghost" onClick={onReset} disabled={!dirty || saving}>
             Reset
           </button>
           {savedAt && (
             <span className="text-muted text-sm">
-              ✓ Saved · applies to this browser only
+              ✓ Saved{user.source === 'SSO' ? ' · applied to your Microsoft Entra identity' : ' · applies to this browser only'}
             </span>
           )}
           {!valid && (
             <span className="text-sm" style={{ color: 'var(--color-danger)' }}>
-              Display name and team are required.
+              Display name and team are required{!emailValid ? ', and the email must be valid.' : '.'}
             </span>
           )}
         </div>

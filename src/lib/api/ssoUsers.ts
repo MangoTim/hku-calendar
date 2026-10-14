@@ -54,5 +54,20 @@ export const SsoUsers = {
 
   async remove(id: number): Promise<{ ok: true }> {
     return jsonFetch<{ ok: true }>(`/api/sso/users/${id}`, { method: 'DELETE' });
+  },
+
+  /** Self-service profile update (RFQ §2(d) — "Allows users to manage
+   *  their own profile settings"). Open to any SSO-signed-in user; only
+   *  mutates their own sso_users row (displayName / title / team /
+   *  email). role / enabled / username remain admin-only — the server
+   *  endpoint rejects them with 403 if a non-admin tries to send them.
+   *
+   *  Throws on 409 (email already registered) so the FE can surface a
+   *  friendly toast. */
+  async updateMe(input: Partial<Pick<SsoUserInput, 'displayName' | 'title' | 'team' | 'email'>>): Promise<{ user: SsoUserView }> {
+    return jsonFetch<{ user: SsoUserView }>('/api/sso/users/me', {
+      method: 'PUT',
+      body: JSON.stringify(input)
+    });
   }
 };

@@ -175,7 +175,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       team: profileOverride?.team ?? session.team,
       title: profileOverride?.title ?? session.title,
       source: session.source,
-      email: session.email,
+      // SSO users get their email from the DB-backed session (already
+      // looked up at sign-in); the LS override is only used for
+      // LOCAL/DEMO users whose email is purely a client-side setting.
+      email: session.source === 'SSO'
+        ? session.email
+        : (profileOverride?.email ?? session.email),
       enabled: true,
       morningTeamDigestEnabled: true,
       mondayTwoWeekLeaveReportEnabled: false
