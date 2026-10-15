@@ -843,17 +843,17 @@ option:hover, option:focus, option:checked, option:active {
 .chip--task-muted   { background: #e5e7eb; color: #374151; border-left-color: #6b7280; }
 
 /* Summary chips on the Dashboard "Schedule overview" — one unified color per
-   source (blue = booking, red = leave, green = task). The per-type colors
-   (IT-support, leave-type, task-priority) remain on the dedicated Bookings /
-   Leave / Tasks pages — those `.cal` tables do NOT carry .dash-cal. */
+   source (blue = booking, yellow = leave, red = task deadline). The per-type
+   colors (IT-support, leave-type, task-priority) remain on the dedicated
+   Bookings / Leave / Tasks pages — those `.cal` tables do NOT carry .dash-cal. */
 .cal.dash-cal .chip.chip--src-booking {
   background: #dbeafe; color: #1e3a8a; border-left-color: var(--color-info);
 }
 .cal.dash-cal .chip.chip--src-leave {
-  background: #fee2e2; color: #991b1b; border-left-color: var(--color-danger);
+  background: #fef3c7; color: #92400e; border-left-color: var(--color-warning);
 }
 .cal.dash-cal .chip.chip--src-task {
-  background: #d1fae5; color: #065f46; border-left-color: var(--color-success);
+  background: #fee2e2; color: #991b1b; border-left-color: var(--color-danger);
 }
 /* Dashboard summary shows full text — no chip__name truncation. Wraps inside
    the cell, so chips grow tall instead of clipping. */
@@ -887,8 +887,8 @@ option:hover, option:focus, option:checked, option:active {
   border-left: 3px solid transparent;
 }
 .legend-dot--booking { background: #dbeafe; border-left-color: var(--color-info); }
-.legend-dot--leave   { background: #fee2e2; border-left-color: var(--color-danger); }
-.legend-dot--task    { background: #d1fae5; border-left-color: var(--color-success); }
+.legend-dot--leave   { background: #fef3c7; border-left-color: var(--color-warning); }
+.legend-dot--task    { background: #fee2e2; border-left-color: var(--color-danger); }
 
 /* ---------- Progress ---------- */
 .progress {

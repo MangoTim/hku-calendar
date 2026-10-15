@@ -218,7 +218,7 @@ export function DashboardCalendar() {
 }
 
 // ---------------- Chip variants ----------------
-// Summary cards use ONE color per source (blue=booking, red=leave, green=task)
+// Summary cards use ONE color per source (blue=booking, yellow=leave, red=task)
 // via `.cal.dash-cal .chip.chip--src-*` so the legend reads at a glance.
 // The per-type colors (IT-support, leave-type, task-priority) live on the
 // Bookings / Leave / Tasks detail pages — those `.cal` tables are NOT
