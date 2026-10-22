@@ -1076,7 +1076,7 @@ option:hover, option:focus, option:checked, option:active {
   height: 16px;
   border-radius: 50%;
   background: var(--color-primary);
-  border: 3px solid var(--surface);
+  border: 3px solid var(--bg-card);
   box-shadow: 0 0 0 1px var(--border);
 }
 .timeline__head {
@@ -1112,7 +1112,7 @@ option:hover, option:focus, option:checked, option:active {
   grid-template-columns: 80px repeat(var(--day-rooms, 1), minmax(120px, 1fr));
   grid-auto-rows: 36px;
   border-top: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--bg-card);
   position: relative;
 }
 .day-grid + .day-grid { border-top: 8px solid var(--border); }
@@ -1222,7 +1222,7 @@ option:hover, option:focus, option:checked, option:active {
   padding: 16px;
 }
 .modal {
-  background: var(--surface);
+  background: var(--bg-card);
   border-radius: var(--radius);
   width: 100%;
   max-width: 460px;
