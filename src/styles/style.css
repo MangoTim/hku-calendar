@@ -1091,3 +1091,182 @@ option:hover, option:focus, option:checked, option:active {
   color: var(--text);
   font-size: 13px;
 }
+
+/* ---------- Day-view timetable grid (Bookings > Day) ----------
+   Time column on the left; one column per room to the right. Each chunk
+   contains up to 3 rooms per row (extra rooms stack into another chunk
+   below). Booking blocks are absolute children of the same grid and
+   placed via grid-row span so they always cover all the 30-min slots
+   their time range touches. */
+.day-header {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.day-header .right { margin-left: auto; }
+.day-grid {
+  display: grid;
+  grid-template-columns: 80px repeat(var(--day-rooms, 1), minmax(120px, 1fr));
+  grid-auto-rows: 36px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  position: relative;
+}
+.day-grid + .day-grid { border-top: 8px solid var(--border); }
+.day-grid__corner {
+  border-bottom: 2px solid var(--color-primary);
+  border-right: 1px solid var(--border);
+  background: #fafafa;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+.day-grid__room {
+  border-bottom: 2px solid var(--color-primary);
+  padding: 10px 12px;
+  background: #f5f7fa;
+  font-weight: 600;
+  text-align: center;
+  color: var(--color-primary);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.day-grid__time {
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid #eef0f3;
+  padding: 6px 10px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: #fafafa;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.day-grid__add {
+  border: 0;
+  border-right: 1px solid #eef0f3;
+  border-bottom: 1px solid #eef0f3;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s ease;
+}
+.day-grid__add:hover {
+  background: var(--color-primary-soft);
+}
+.day-grid__add:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+  background: var(--color-primary-soft);
+}
+.day-grid__booking {
+  margin: 2px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #4FC3F7;
+  color: #fff;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  border-left: 3px solid #0288D1;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  cursor: pointer;
+}
+.day-grid__booking:hover { background: #29B6F6; }
+.day-grid__booking--mine {
+  background: #1e3a8a;
+  border-left-color: #1e40af;
+}
+.day-grid__booking-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.day-grid__booking-sub {
+  font-size: 11px;
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Modal (booking quick-create) ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+.modal {
+  background: var(--surface);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 460px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+}
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.modal__head h2 { margin: 0; font-size: 16px; }
+.modal__close {
+  background: transparent;
+  border: 0;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+.modal__close:hover { color: var(--text); }
+.modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+}
+.modal__body label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.modal__row { display: flex; gap: 12px; }
+.modal__row > label { flex: 1; }
+.modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
