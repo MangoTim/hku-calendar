@@ -46,7 +46,8 @@ function NavGroup({ title, items, onNavigate }: { title: string; items: NavItem[
             onClick={onNavigate}
             className={({ isActive }) => `sidebar__link ${isActive ? 'is-active' : ''}`}
           >
-            <span className="ic" aria-hidden="true">{item.icon}</span>{item.label}
+            <span className="ic" aria-hidden="true">{item.icon}</span>
+            <span className="sidebar__label">{item.label}</span>
           </NavLink>
         ))}
       </div>

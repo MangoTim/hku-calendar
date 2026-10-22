@@ -97,6 +97,15 @@ a:hover { text-decoration: underline; }
   position: sticky;
   top: 0;
   height: 100vh;
+  /* Grid/flex items default to min-width/min-height:auto, so a long nav
+     could stretch the panel past --sidebar-w. Pin the dark panel to its own
+     size and scroll the list inside it — otherwise a short viewport
+     (mirroring to a projector) drops the bottom links onto the white page. */
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.25) transparent;
 }
 .app__topbar {
   grid-area: topbar;
@@ -126,6 +135,12 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.3px;
+  /* Keep the header full-bleed while the list scrolls under it. */
+  flex: none;
+  position: sticky;
+  top: 0;
+  background: var(--bg-sidebar);
+  z-index: 2;
 }
 .sidebar__brand .brand-mark {
   width: 28px; height: 28px;
@@ -137,9 +152,17 @@ a:hover { text-decoration: underline; }
   color: #fff;
   font-weight: 700;
   font-size: 12px;
+  flex: none;
+}
+.sidebar__brand > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sidebar__group {
   padding: var(--space-3) var(--space-2) var(--space-2);
+  min-width: 0;
 }
 .sidebar__group-title {
   text-transform: uppercase;
@@ -162,16 +185,24 @@ a:hover { text-decoration: underline; }
   color: var(--text-on-dark);
   font-size: 13px;
   text-decoration: none;
+  min-width: 0;
 }
 .sidebar__link:hover { background: var(--bg-sidebar-hover); text-decoration: none; }
 .sidebar__link.is-active { background: var(--bg-sidebar-active); color: #fff; }
-.sidebar__link .ic { width: 18px; text-align: center; }
-.sidebar__spacer { flex: 1; }
+.sidebar__link .ic { width: 18px; text-align: center; flex: none; }
+.sidebar__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar__spacer { flex: 1 1 auto; min-height: var(--space-3); }
 .sidebar__footer {
   padding: var(--space-3) var(--space-4);
   font-size: 11px;
   color: var(--text-on-dark-muted);
   border-top: 1px solid rgba(255,255,255,0.08);
+  flex: none;
 }
 
 /* Topbar */
