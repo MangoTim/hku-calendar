@@ -8,7 +8,8 @@
 // behind, but the email still goes out with whatever's in DB).
 import { jsonFetch } from './fetch';
 import { Session } from '../app';
-import { USERS, ROOMS } from '../data';
+import { USERS } from '../data';
+import { Rooms } from '../rooms';
 import type { Booking } from '../types';
 
 export const BookingMirror = {
@@ -18,7 +19,7 @@ export const BookingMirror = {
     try {
       const session = Session.get();
       const booker = USERS.find(u => u.id === Number(b.bookedById));
-      const room = ROOMS.find(r => r.id === Number(b.roomId));
+      const room = Rooms.byId(b.roomId);
       await jsonFetch('/api/bookings', {
         method: 'POST',
         body: JSON.stringify({

@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings } from '../lib/bookings';
-import { ROOMS } from '../lib/data';
+import { Rooms } from '../lib/rooms';
 import { fmt, escapeHtml } from '../lib/app';
 
 export function BookingDetail() {
@@ -33,7 +33,7 @@ export function BookingDetail() {
     );
   }
 
-  const room = ROOMS.find(r => r.id === b.roomId);
+  const room = Rooms.byId(b.roomId);
   const { findById } = useUsers();
   const booker = findById(b.bookedById);
   const canEdit = user!.id === b.bookedById || ROLE.isAdmin();

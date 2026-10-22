@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings, localISO } from '../lib/bookings';
-import { ROOMS } from '../lib/data';
+import { Rooms } from '../lib/rooms';
 import { fmt, escapeHtml, todayISO } from '../lib/app';
 import type { Booking } from '../lib/types';
 
@@ -307,7 +307,7 @@ function DayGrid({ anchor, bookingsOnDay, currentUserId }: {
   const slots: string[] = [];
   for (let m = DAY_START_MIN; m <= DAY_END_MIN; m += SLOT_MIN) slots.push(slotLabel(m));
 
-  const activeRooms = ROOMS.filter(r => r.active);
+  const activeRooms = Rooms.active();
 
   // Chunk rooms into groups of 3 (per the HKU intranet screenshot).
   const chunks: typeof activeRooms[] = [];
@@ -506,7 +506,7 @@ function BookingQuickModal({
     if (e.target === e.currentTarget) onClose();
   };
 
-  const activeRooms = ROOMS.filter(r => r.active);
+  const activeRooms = Rooms.active();
 
   return (
     <div className="modal-backdrop" onClick={onBackdrop} role="dialog" aria-modal="true">
@@ -600,7 +600,7 @@ function BookingQuickModal({
 
 // ---------------- Shared chip ----------------
 function BookingChip({ b, currentUserId }: { b: Booking; currentUserId: number }) {
-  const room = ROOMS.find(r => r.id === b.roomId);
+  const room = Rooms.byId(b.roomId);
   const isMine = b.bookedById === currentUserId;
   const cls = `chip${b.itSupport ? ' chip--it' : ''}${isMine ? ' chip--mine' : ''}`;
   return (

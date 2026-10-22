@@ -4,10 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUsers } from '../contexts/UsersContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { AppShell } from '../components/AppShell';
-import {
-  ROOMS,
-  TASK_SETTINGS
-} from '../lib/data';
+import { TASK_SETTINGS } from '../lib/data';
+import { Rooms } from '../lib/rooms';
 import { Tasks } from '../lib/tasks';
 import { Bookings } from '../lib/bookings';
 import { Leave } from '../lib/leave';
@@ -16,7 +14,7 @@ import { Notifications } from '../lib/notifications';
 import { fmt, escapeHtml, todayISO, addDaysISO } from '../lib/app';
 import { DashboardCalendar } from '../components/DashboardCalendar';
 
-const roomById = (id: number) => ROOMS.find(r => r.id === id) || null;
+const roomById = (id: number) => Rooms.byId(id) || null;
 
 export function Dashboard() {
   const { session, user, ROLE } = useAuth();

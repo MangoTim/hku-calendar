@@ -6,7 +6,7 @@ import { AppShell } from '../components/AppShell';
 import { useAuth } from '../contexts/AuthContext';
 import { useHoliday } from '../contexts/HolidayContext';
 import { Bookings } from '../lib/bookings';
-import { ROOMS } from '../lib/data';
+import { Rooms } from '../lib/rooms';
 import { escapeHtml, todayISO } from '../lib/app';
 import { EmailApi, type EmailConfig } from '../lib/api/email';
 
@@ -50,7 +50,7 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
 
   const preselectedRoom = editing
     ? editing.roomId
-    : Number(params.get('room') || (ROOMS.find(r => r.active)?.id ?? 0));
+    : Number(params.get('room') || (Rooms.active()[0]?.id ?? 0));
   const preselectedDate = editing?.date || params.get('date') || todayISO();
 
   const [form, setForm] = useState<FormState>(() => editing
@@ -134,7 +134,7 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
       let itEmailStatus = '';
       if (created.itSupport) {
         try {
-          const room = ROOMS.find(r => r.id === created.roomId);
+          const room = Rooms.byId(created.roomId);
           await EmailApi.sendItSupport({
             ref: created.ref,
             date: created.date,
@@ -200,7 +200,7 @@ function BookingForm({ mode }: { mode: 'new' | 'edit' }) {
             onChange={e => setForm({ ...form, roomId: Number(e.target.value) })}
             required
           >
-            {ROOMS.map(r => (
+            {Rooms.all().map(r => (
               <option key={r.id} value={r.id} disabled={!r.active}>
                 {r.name} — {r.building} ({r.maxSeats} seats){r.active ? '' : ' — inactive'}
               </option>

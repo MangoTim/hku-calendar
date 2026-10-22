@@ -11,7 +11,7 @@ import { Link } from 'react-router-dom';
 import { Bookings, localISO } from '../lib/bookings';
 import { Leave } from '../lib/leave';
 import { Tasks } from '../lib/tasks';
-import { ROOMS } from '../lib/data';
+import { Rooms } from '../lib/rooms';
 import { todayISO, escapeHtml } from '../lib/app';
 import { useAuth } from '../contexts/AuthContext';
 import { useUsers } from '../contexts/UsersContext';
@@ -225,7 +225,7 @@ export function DashboardCalendar() {
 // `.dash-cal`, so this summary view never competes with them.
 
 function DashBookingChip({ b }: { b: Booking }) {
-  const room = ROOMS.find(r => r.id === b.roomId);
+  const room = Rooms.byId(b.roomId);
   return (
     <Link to={`/bookings/${b.id}`} className="chip chip--src-booking" title={`${b.purpose} · ${room?.name || ''}`}>
       <strong className="chip__time">{b.startTime}</strong>
