@@ -337,34 +337,46 @@ function DayGrid({ anchor, bookingsOnDay, currentUserId }: {
           className="day-grid"
           style={{ ['--day-rooms' as never]: chunk.length } as React.CSSProperties}
         >
-          {/* header row */}
-          <div className="day-grid__corner" aria-hidden="true"></div>
-          {chunk.map(r => (
-            <div key={r.id} className="day-grid__room">{r.name}</div>
+          {/* header row (row 1) */}
+          <div className="day-grid__corner" aria-hidden="true"
+               style={{ gridColumn: 1, gridRow: 1 }}></div>
+          {chunk.map((r, j) => (
+            <div key={r.id} className="day-grid__room"
+                 style={{ gridColumn: j + 2, gridRow: 1 }}>{r.name}</div>
           ))}
 
-          {/* time + (add) cells (chronological rows) */}
-          {slots.map(slot => (
+          {/* Time + (add) cells. Every cell gets an EXPLICIT grid position —
+              booking blocks below occupy the same cells, and CSS grid
+              sparse auto-placement would shift everything after the first
+              collision. */}
+          {slots.map((slot, i) => (
             <Fragment key={slot}>
-              <div className="day-grid__time">{slot}</div>
-              {chunk.map(r => {
+              <div className="day-grid__time"
+                   style={{ gridColumn: 1, gridRow: i + 2 }}>{slot}</div>
+              {chunk.map((r, j) => {
+                const cell = {
+                  gridColumn: j + 2,
+                  gridRow: i + 2,
+                } as React.CSSProperties;
                 // Don't show (add) if a booking already covers this slot.
                 const covered = dayBookings.some(b => {
                   if (b.roomId !== r.id) return false;
                   return b.startTime <= slot && b.endTime > slot;
                 });
                 if (covered) {
-                  return <div key={r.id} className="day-grid__add" aria-hidden="true"></div>;
+                  return <div key={r.id} className="day-grid__add" aria-hidden="true"
+                              style={cell}></div>;
                 }
                 return (
                   <button
                     key={r.id}
                     type="button"
                     className="day-grid__add"
+                    style={cell}
                     onClick={() =>
                       setModal({ roomId: r.id, date: iso, startTime: slot })
                     }
-                    // pre-set the click default end to slot + 30min
+                    // prevent the button stealing focus before the modal opens
                     onMouseDown={e => e.preventDefault()}
                     title={`Book ${r.name} at ${slot}`}
                   >
