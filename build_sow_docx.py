@@ -251,7 +251,12 @@ def main():
     if in_code and code_lines:
         add_code_block(doc, code_lines)
 
-    doc.save(OUT)
+    try:
+        doc.save(OUT)
+    except PermissionError:
+        raise SystemExit(
+            f"cannot write {OUT.name} — it is open in Word. Close it and re-run."
+        )
     print(f"wrote {OUT}")
 
 

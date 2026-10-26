@@ -69,6 +69,8 @@ The following are **excluded** from the POC and are not delivered, tested, or su
 | D5 | POC support | Remote, during the POC period | Ad-hoc assistance with deployment, configuration, and defect triage (Section 7) |
 | D6 | POC findings report | Markdown, issued at POC close | Findings against each acceptance criterion in Section 10, an itemised list of defects and observations, and a production-readiness gap assessment with indicative effort to close it |
 
+**Illustrative material.** A product overview containing screenshots of the application interface is available on request for evaluation purposes. It is not a contractual deliverable, forms no part of the acceptance criteria in Section 10, and the interface shown may differ from the build delivered under this POC.
+
 ## 5. Customer prerequisites and responsibilities
 
 **These must be in place before the POC deployment.** The Provider's support during the POC period is limited to the application; the Provider does not administer the Customer's infrastructure, database, or identity tenant.
