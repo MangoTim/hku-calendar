@@ -82,19 +82,24 @@
 // ---------------------------------------------------------------------------
 // Known accepted risks (deliberate, so the pipeline stays green):
 //
-//   * xlsx@0.18.5 is the last release ever published to the npm registry —
-//     the package is deprecated and maintained builds live on
-//     cdn.sheetjs.com. Its two HIGH advisories are explicitly --ignore'd in
-//     the bun audit step below.
-//     TODO: swap to the SheetJS CDN tarball or a maintained reader, then drop
-//     the ignores.
+//   * xlsx was swapped from the abandoned npm release (0.18.5 — the last
+//     version ever published to the npm registry, deprecated, and carrying
+//     two HIGH advisories) to the maintained SheetJS CDN build 0.20.3
+//     (https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz). Only
+//     XLSX.read() and XLSX.utils.sheet_to_json() are used by this app and
+//     both are API-stable across 0.18 → 0.20, so no source change was
+//     needed. The `bun audit` ignore list was deleted: the audit is now
+//     clean with NO exceptions.
 //
-//   * The secret scan is REPORT-ONLY (it prints findings, it does not fail
-//     the build). It currently surfaces two real hardcoded fallbacks:
+//   * Trivy runs with --exit-code 1, so its output is a HARD GATE: any
+//     HIGH/CRITICAL library CVE or any secret it detects fails the build.
+//     Trivy's rules currently match NOTHING in this tree, so two real
+//     hardcoded fallbacks still survive the scanner (but not code review):
 //       server/src/db.ts          → process.env.DB_PASSWORD || 'redhat'
 //       server/src/cookieSecret.ts → process.env.SSO_COOKIE_SECRET || 'dev-only-not-secure-change-me'
-//     TODO: move both into env vars / Jenkins credentials, then promote the
-//     secret scan to a hard gate by adding --exit-code 1 to the Trivy step.
+//     They are low-entropy literals, not high-entropy keys, so no scanner
+//     rule matches them — the scanner is not the control here.
+//     TODO: move both into env vars / Jenkins credentials.
 //
 //   * bun audit exits 1 both for real findings AND when the npm advisory
 //     registry is unreachable. A registry outage therefore fails the build.
@@ -113,6 +118,11 @@
 //       FIXED: `overrides: { "body-parser": "^2.4.0" }` in server/package.json.
 //       express's `^2.2.0` range had left it nested at 2.3.0; the override
 //       forces a single hoisted 2.4.0.
+//     xlsx 0.18.5 → 2 HIGH (prototype pollution / ReDoS)
+//       FIXED: swapped to the maintained SheetJS CDN build 0.20.3
+//       (https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz). No source
+//       change needed — the two APIs in use are API-stable across
+//       0.18 → 0.20. The `bun audit` ignore list was deleted.
 //
 //   Both lockfiles were regenerated and `bun install --frozen-lockfile` —
 //   which is what the Containerfile uses — verified against them.
@@ -135,10 +145,6 @@ pipeline {
         // 8093 is the live production port (container "hku-intranet"); the
         // verify container uses 8094 so it cannot collide with it.
         VERIFY_PORT   = '8094'
-
-        // xlsx@0.18.5 — GHSA-4r6h-8v6p-xvw6 (prototype pollution) and
-        // GHSA-5pgg-2g8v-p4x9 (ReDoS). Both HIGH. See "Known accepted risks".
-        BUN_AUDIT_IGNORES = 'GHSA-4r6h-8v6p-xvw6 GHSA-5pgg-2g8v-p4x9'
     }
 
     options {
@@ -281,18 +287,15 @@ pipeline {
                     BUN_RC=0
                     podman run --rm --name hku-audit-${BUILD_NUMBER} \
                         --network host --security-opt label=disable \
-                        -e AUDIT_IGNORES="${BUN_AUDIT_IGNORES}" \
                         --entrypoint sh -w /app ${SCAN_IMAGE} \
                         -c '
-                            set --
-                            for g in ${AUDIT_IGNORES}; do set -- "$@" --ignore "$g"; done
                             rc=0
                             echo "### bun audit — workspace root"
-                            bun audit --audit-level=high "$@" || rc=$?
+                            bun audit --audit-level=high || rc=$?
                             cd server
                             echo ""
                             echo "### bun audit — server/"
-                            bun audit --audit-level=high "$@" || rc=$?
+                            bun audit --audit-level=high || rc=$?
                             exit $rc
                         ' > bun-audit.txt 2>&1 || BUN_RC=$?
 
@@ -300,10 +303,11 @@ pipeline {
                     echo "bun audit exit code: ${BUN_RC}"
 
                     # ------------------------------------------------------------------
-                    # 2. Trivy — library CVEs + hardcoded secrets in the source tree.
-                    #    REPORT-ONLY (no --exit-code): it currently surfaces the two
-                    #    hardcoded defaults documented in the header, and we do not
-                    #    want that to block every build yet.
+                    # 2. Trivy — library CVEs + hardcoded secrets across BOTH
+                    #    dependency trees (frontend + server), scanned against the
+                    #    builder image so the frontend packages are visible.
+                    #    HARD GATE: --exit-code 1 turns any HIGH/CRITICAL finding
+                    #    (or any detected secret) into a build failure.
                     # ------------------------------------------------------------------
                     TRIVY_RC=0
                     # The docker socket is REQUIRED: Trivy resolves the target
@@ -322,13 +326,14 @@ pipeline {
                         -e TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2 \
                         ${TRIVY_IMAGE} \
                         image --scanners vuln,secret \
-                            --vuln-type library \
+                            --pkg-types library \
                             --severity HIGH,CRITICAL \
+                            --exit-code 1 \
                             --format table \
                             ${SCAN_IMAGE} > trivy-report.txt 2>&1 || TRIVY_RC=$?
 
                     cat trivy-report.txt
-                    echo "trivy exit code: ${TRIVY_RC} (report-only — not a gate)"
+                    echo "trivy exit code: ${TRIVY_RC}"
 
                     # ------------------------------------------------------------------
                     # Gate: HIGH/CRITICAL dependency advisories.
@@ -337,7 +342,16 @@ pipeline {
                         echo "BLOCKED: bun audit reported HIGH/CRITICAL dependency advisories (or the npm advisory registry was unreachable) — see bun-audit.txt"
                         exit 1
                     fi
-                    echo "Code scan OK: no HIGH/CRITICAL dependency advisories outside the documented ignore list."
+
+                    # ------------------------------------------------------------------
+                    # Gate: Trivy — HIGH/CRITICAL library CVEs + detected secrets.
+                    # ------------------------------------------------------------------
+                    if [ "${TRIVY_RC}" -ne 0 ]; then
+                        echo "BLOCKED: Trivy reported HIGH/CRITICAL findings, detected a secret, or the scan itself failed — see trivy-report.txt"
+                        exit 1
+                    fi
+
+                    echo "Code scan OK: no HIGH/CRITICAL dependency advisories, no detected secrets."
                 '''
             }
             post {
