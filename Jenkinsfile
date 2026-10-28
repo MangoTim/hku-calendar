@@ -306,8 +306,18 @@ pipeline {
                     #    want that to block every build yet.
                     # ------------------------------------------------------------------
                     TRIVY_RC=0
+                    # The docker socket is REQUIRED: Trivy resolves the target
+                    # image through a container runtime API, and without the
+                    # socket it can only reach a remote registry. It then
+                    # fails with:
+                    #   unable to find the specified image "hku-intranet-scan:N"
+                    #   in ["docker" "containerd" "podman" "remote"]
+                    # On this host /var/run/docker.sock is a symlink to
+                    # /run/podman/podman.sock, so the same mount works for
+                    # both the Aqua scanner and Trivy.
                     podman run --rm --name hku-trivy-${BUILD_NUMBER} \
                         --network host --security-opt label=disable \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
                         -v trivy-cache:/root/.cache/trivy \
                         -e TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2 \
                         ${TRIVY_IMAGE} \
