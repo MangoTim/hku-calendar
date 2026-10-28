@@ -205,7 +205,7 @@ pipeline {
             //     v<major>.<minor>.<DDMMYY><NN>
             //
             //   major.minor  the release line, from the VERSION file in the
-            #                 repo root. Bump it to 1.2 when there is a big
+            //                 repo root. Bump it to 1.2 when there is a big
             //                 change, and back to 1.1 for small ones.
             //   DDMMYY       the build date, pinned to Hong Kong time so the
             //                 tag does not depend on where the agent runs (the
