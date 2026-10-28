@@ -169,6 +169,7 @@ pipeline {
 
     environment {
         REGISTRY      = '192.168.147.105:8082'
+        REGISTRY_URL  = 'http://192.168.147.105:8082'
         IMAGE_NAME    = 'hku-intranet'
         AQUA_HOST     = 'https://192.168.147.105'
         SCANNER_IMAGE = 'registry.aquasec.com/scanner:2022.4.868'
@@ -219,7 +220,7 @@ pipeline {
             steps {
                 script {
                     def base = sh(script: "tr -d ' \\n' < VERSION", returnStdout: true).trim()
-                    def day  = sh(script: "TZ=Asia/Hong_Kong date +%d%m%Y", returnStdout: true).trim()
+                    def day  = sh(script: "TZ=Asia/Hong_Kong date +%d%m%y", returnStdout: true).trim()
                     def seq  = sh(script: "printf '%02d' ${BUILD_NUMBER}", returnStdout: true).trim()
 
                     env.IMAGE_VERSION = "v${base}.${day}${seq}"
@@ -359,11 +360,13 @@ pipeline {
                             ${SCANNER_IMAGE} \
                             scan \
                                 --host ${AQUA_HOST} \
-                                --registry ${FULL_IMAGE} \
+                                --registry ${REGISTRY_URL} \
                                 --no-verify \
                                 --user ${AQUA_USER} \
                                 --password ${AQUA_PASSWORD} \
-                                --html > aqua-registry-report.html 2> aqua-registry-scan.err \
+                                --html \
+                                ${IMAGE_NAME}:${IMAGE_VERSION} \
+                                > aqua-registry-report.html 2> aqua-registry-scan.err \
                             || echo "NOTE: registry scan did not complete (informational only) — see aqua-registry-scan.err"
                     '''
                 }
