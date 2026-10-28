@@ -48,6 +48,23 @@
 //        (The aqua-test pipeline needed them only for its cosmetic sidebar,
 //        which is not used here.)
 //
+//   7. The aqua-web console container must have a working OUTBOUND path
+//        to cybercenter5.aquasec.com. The scanner reaches the console fine,
+//        but the console itself performs the "cybercenter ↔ scanner
+//        compatibility" check server-side — when the console cannot reach
+//        the internet, the scan fails with:
+//            twirp error internal: Failed checking cybercenter to scanner
+//            compatibility: ... Get "https://cybercenter5.aquasec.com/":
+//            net/http: TLS handshake timeout
+//        This is a HOST-side problem, not a pipeline problem. Symptom on the
+//        host: `podman logs aqua-web` shows "dial tcp 192.168.147.103:5432:
+//        connect: no route to host" and the console UI on :8080 hangs.
+//        Cause: podman's per-container CNI chains / bridge attachment are
+//        destroyed by `firewall-cmd --reload` (firewalld uses the nftables
+//        backend and flushes the nat table that podman wrote into).
+//        Fix on the host:  podman network reload
+//        (or recreate the aqua-web / aqua-gateway containers).
+//
 // ---------------------------------------------------------------------------
 // Why a separate code-scan stage?
 //
@@ -152,11 +169,17 @@ pipeline {
                     # firewalled. No Dockerfile step binds a port, so sharing
                     # the host netns is safe here.
 
+                    # --format docker: podman's default is OCI, which silently
+                    # DROPS the HEALTHCHECK instruction ("HEALTHCHECK is not
+                    # supported for OCI image format"). Docker format keeps it
+                    # and is what every other tool in the chain expects.
+
                     # Scan target FIRST: it IS the builder stage, so the layers
                     # land in the build cache and the runtime build below
                     # reuses them instead of rebuilding.
                     podman build \
                         --file Containerfile \
+                        --format docker \
                         --network host \
                         --target builder \
                         --tag ${SCAN_IMAGE} \
@@ -166,6 +189,7 @@ pipeline {
 
                     podman build \
                         --file Containerfile \
+                        --format docker \
                         --network host \
                         --tag ${FULL_IMAGE} \
                         --label build.number=${BUILD_NUMBER} \
@@ -192,8 +216,14 @@ pipeline {
                     passwordVariable: 'AQUA_PASSWORD'
                 )]) {
                     sh '''
-                        set -eux
-                        podman run --rm --network host \
+                        set -u
+
+                        # Capture the scanner exit code instead of letting
+                        # `set -e` kill the shell — otherwise a scanner failure
+                        # produces no diagnostic at all, only a red stage.
+                        SCAN_RC=0
+                        podman run --rm --name aqua-scan-${BUILD_NUMBER} \
+                            --network host \
                             --security-opt label=disable --user root \
                             -v /var/run/docker.sock:/var/run/docker.sock \
                             ${SCANNER_IMAGE} \
@@ -203,7 +233,22 @@ pipeline {
                                 --no-verify \
                                 --user ${AQUA_USER} \
                                 --password ${AQUA_PASSWORD} \
-                                --html > aqua-report.html
+                                --html > aqua-report.html 2> aqua-scan.err || SCAN_RC=$?
+
+                        if [ "${SCAN_RC}" -ne 0 ]; then
+                            echo "--- Aqua scanner stderr ---"
+                            cat aqua-scan.err || true
+                            echo "--- Aqua scanner output ---"
+                            cat aqua-report.html || true
+                            echo ""
+                            echo "BLOCKED: Aqua scanner CLI exited ${SCAN_RC}"
+                            echo "HINT: 'TLS handshake timeout' / 'Failed checking cybercenter to"
+                            echo "      scanner compatibility' means the aqua-web console container"
+                            echo "      on the Jenkins host has lost its outbound path. Fix on the"
+                            echo "      host with:  podman network reload"
+                            echo "      (or recreate aqua-web + aqua-gateway), then re-run."
+                            exit 1
+                        fi
 
                         echo "--- Aqua scan summary ---"
                         # Print the compliance marker so it shows in the console
@@ -217,7 +262,7 @@ pipeline {
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'aqua-report.html',
+                    archiveArtifacts artifacts: 'aqua-report.html,aqua-scan.err',
                                      allowEmptyArchive: true
                 }
             }
@@ -234,7 +279,8 @@ pipeline {
                     #    Root workspace first, then server/ (separate lockfile).
                     # ------------------------------------------------------------------
                     BUN_RC=0
-                    podman run --rm --network host --security-opt label=disable \
+                    podman run --rm --name hku-audit-${BUILD_NUMBER} \
+                        --network host --security-opt label=disable \
                         -e AUDIT_IGNORES="${BUN_AUDIT_IGNORES}" \
                         --entrypoint sh -w /app ${SCAN_IMAGE} \
                         -c '
@@ -260,7 +306,8 @@ pipeline {
                     #    want that to block every build yet.
                     # ------------------------------------------------------------------
                     TRIVY_RC=0
-                    podman run --rm --network host --security-opt label=disable \
+                    podman run --rm --name hku-trivy-${BUILD_NUMBER} \
+                        --network host --security-opt label=disable \
                         -v trivy-cache:/root/.cache/trivy \
                         -e TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2 \
                         ${TRIVY_IMAGE} \
@@ -336,6 +383,26 @@ pipeline {
     post {
         always {
             sh '''
+                # Remove the sidecar containers this build started. They all
+                # run with --rm, but a FAILED run can leave one behind (the
+                # Aqua scanner's scan-target container is the usual one), and
+                # a container holding an image makes `podman rmi` refuse:
+                #     image used by <id>: image is in use by a container
+                podman rm -f aqua-scan-${BUILD_NUMBER} \
+                             hku-audit-${BUILD_NUMBER} \
+                             hku-trivy-${BUILD_NUMBER} \
+                             hku-intranet-verify-${BUILD_NUMBER} 2>/dev/null || true
+
+                # Force-clear any other container still holding the scan-only
+                # image. ${SCAN_IMAGE} is never used by the production
+                # container, so removing its holders is always safe.
+                for c in $(podman ps -aq --filter ancestor=${SCAN_IMAGE} 2>/dev/null); do
+                    podman rm -f "$c" || true
+                done
+
+                # Deliberately NOT --force: if the production container is
+                # running from ${FULL_IMAGE}, rmi correctly refuses and the
+                # image stays. That is the safe outcome.
                 podman rmi ${FULL_IMAGE} || true
                 podman rmi ${SCAN_IMAGE} || true
             '''
