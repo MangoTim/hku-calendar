@@ -16,3 +16,7 @@ coverage
 !.env.example
 tests
 docs
+
+# Local credentials — must never enter the build context
+authtoken.txt
+*.tsbuildinfo

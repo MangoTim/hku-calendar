@@ -47,11 +47,26 @@ COPY --from=builder /app/vite.config.ts ./vite.config.ts
 
 # Backup snapshots (volume-mounted in run command)
 RUN mkdir -p /app/backups
+
+# Run as the image's non-root 'bun' user (uid 1000). Aqua's `root_user`
+# assurance control flags a root-running image as Non-compliant, which fails
+# the CI gate on "Image Is Compliant".
+#
+# NOTE for the rootless deployment on 192.168.147.105 (user `rhai`): the
+# container process now runs as uid 1000, which rootless podman maps to a
+# subuid — NOT to rhai's own uid. The bind-mounted backups directory must
+# therefore be writable by it:
+#     chmod 0777 /home/rhai/hku-intranet/backups
+# or run with `--userns=keep-id:uid=1000,gid=1000` so the process maps back
+# to rhai.
+RUN chown -R bun:bun /app
 VOLUME ["/app/backups"]
 
 EXPOSE 8093
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD bun -e 'fetch("http://127.0.0.1:"+(process.env.PORT||8093)+"/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
+
+USER bun
 
 CMD ["bun", "run", "server/src/index.ts"]
