@@ -144,11 +144,20 @@ pipeline {
                 sh '''
                     set -eux
 
+                    # --network host: the RUN steps need the npm registry. The
+                    # host's rootful podman bridge is firewalled — container
+                    # egress is dropped in the FORWARD chain — so a default
+                    # (bridge) build hangs on `bun install`. Host networking
+                    # routes build egress through OUTPUT instead, which is not
+                    # firewalled. No Dockerfile step binds a port, so sharing
+                    # the host netns is safe here.
+
                     # Scan target FIRST: it IS the builder stage, so the layers
                     # land in the build cache and the runtime build below
                     # reuses them instead of rebuilding.
                     podman build \
                         --file Containerfile \
+                        --network host \
                         --target builder \
                         --tag ${SCAN_IMAGE} \
                         --label build.number=${BUILD_NUMBER} \
@@ -157,6 +166,7 @@ pipeline {
 
                     podman build \
                         --file Containerfile \
+                        --network host \
                         --tag ${FULL_IMAGE} \
                         --label build.number=${BUILD_NUMBER} \
                         --label build.url=${BUILD_URL} \
