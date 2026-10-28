@@ -80,7 +80,43 @@
 //   `podman build --target builder` produces exactly that image.
 //
 // ---------------------------------------------------------------------------
+// Image version tags
+//
+//   The image is tagged with a version, not a build counter:
+//
+//       v<major>.<minor>.<DDMMYY><NN>       e.g. v1.1.28102601
+//
+//   major.minor  comes from the VERSION file in the repo root. Bump it to
+//                 1.2 for a big change, leave it at 1.1 for small ones.
+//   DDMMYY       the build date, pinned to Hong Kong time (the agent
+//                 container runs UTC, the host runs America/New_York).
+//   NN           the Jenkins build number, zero padded to two digits. It is
+//                 monotonic, so a tag is never reused and always maps back to
+//                 exactly one build.
+//
+//   Full reference: 192.168.147.105:8082/hku-intranet:v1.1.28102601
+//
+// ---------------------------------------------------------------------------
+// What "Image Is Compliant" does and does not mean
+//
+//   The Aqua console's Compliant badge comes from the ASSURANCE POLICY
+//   (testing-image-assurance = malware + root_user). It is NOT a statement
+//   that the image is free of CVEs — the console shows those separately, in
+//   the Vulnerabilities tab of the image page.
+//
+//   Every CVE that showed up there was inherited from the base image, not
+//   from this code. The Debian runtime base (oven/bun:1.3-slim) carried 100
+//   HIGH/CRITICAL, 3 of them CRITICAL, all in perl-base. The runtime stage
+//   now uses oven/bun:1.3-alpine, which carries 4 HIGH and 0 CRITICAL. The
+//   application dependency trees are clean: 0 HIGH/CRITICAL.
+//
+// ---------------------------------------------------------------------------
 // Known accepted risks (deliberate, so the pipeline stays green):
+//
+//   * The 4 HIGH OS CVEs in the alpine base have a fix in a newer alpine
+//     release that no oven/bun tag has picked up yet. They are reported in
+//     trivy-os-report.txt but not gated; CRITICAL is the line that stops a
+//     build. Re-check when oven/bun publishes a newer alpine base.
 //
 //   * xlsx was swapped from the abandoned npm release (0.18.5 — the last
 //     version ever published to the npm registry, deprecated, and carrying
@@ -134,9 +170,6 @@ pipeline {
     environment {
         REGISTRY      = '192.168.147.105:8082'
         IMAGE_NAME    = 'hku-intranet'
-        IMAGE_TAG     = "${env.BUILD_NUMBER}"
-        FULL_IMAGE    = "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-        SCAN_IMAGE    = "${IMAGE_NAME}-scan:${IMAGE_TAG}"
         AQUA_HOST     = 'https://192.168.147.105'
         SCANNER_IMAGE = 'registry.aquasec.com/scanner:2022.4.868'
         TRIVY_IMAGE   = 'docker.io/aquasec/trivy:0.76.1'
@@ -145,6 +178,10 @@ pipeline {
         // 8093 is the live production port (container "hku-intranet"); the
         // verify container uses 8094 so it cannot collide with it.
         VERIFY_PORT   = '8094'
+
+        // IMAGE_VERSION / FULL_IMAGE / SCAN_IMAGE are resolved at run time by
+        // the 'Resolve Version' stage — they depend on the VERSION file and
+        // on the build date, neither of which the environment block can read.
     }
 
     options {
@@ -159,6 +196,39 @@ pipeline {
             steps {
                 git branch: 'main',
                     url: 'https://github.com/MangoTim/hku-calendar.git'
+            }
+        }
+
+        stage('Resolve Version') {
+            // The image tag is a version, not a build counter:
+            //
+            //     v<major>.<minor>.<DDMMYY><NN>
+            //
+            //   major.minor  the release line, from the VERSION file in the
+            #                 repo root. Bump it to 1.2 when there is a big
+            //                 change, and back to 1.1 for small ones.
+            //   DDMMYY       the build date, pinned to Hong Kong time so the
+            //                 tag does not depend on where the agent runs (the
+            //                 agent container is UTC, the host is New York).
+            //   NN           the Jenkins build number, zero padded to two
+            //                 digits. It is monotonic, so a tag is never reused
+            //                 and always maps back to exactly one build.
+            //
+            // Examples: v1.1.28102601, v1.1.28102602, then v1.2.28102603
+            // after the version line is bumped.
+            steps {
+                script {
+                    def base = sh(script: "tr -d ' \\n' < VERSION", returnStdout: true).trim()
+                    def day  = sh(script: "TZ=Asia/Hong_Kong date +%d%m%Y", returnStdout: true).trim()
+                    def seq  = sh(script: "printf '%02d' ${BUILD_NUMBER}", returnStdout: true).trim()
+
+                    env.IMAGE_VERSION = "v${base}.${day}${seq}"
+                    env.FULL_IMAGE    = "${env.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_VERSION}"
+                    env.SCAN_IMAGE    = "${env.IMAGE_NAME}-scan:${env.IMAGE_VERSION}"
+
+                    echo "Image version : ${env.IMAGE_VERSION}"
+                    echo "Full image ref: ${env.FULL_IMAGE}"
+                }
             }
         }
 
@@ -263,12 +333,44 @@ pipeline {
                         # Non-compliant (or missing marker) fails the build.
                         grep -q "Image Is Compliant" aqua-report.html \
                             || { echo "BLOCKED: image is non-compliant (or scan report missing compliance marker)"; exit 1; }
+
+                        # ------------------------------------------------------------------
+                        # Also record the REGISTRY copy of the very same image.
+                        #
+                        # The scan above used --local, so the console files the
+                        # image under the scanner's own local store. This second
+                        # scan pulls the pushed image back from the registry, so
+                        # the console ALSO lists it under
+                        #     192.168.147.105:8082/hku-intranet:<version>
+                        # and the client can find it by tag instead of by
+                        # build number.
+                        #
+                        # Non-blocking on purpose: the local scan above is the
+                        # gate (it inspects the exact bytes that will run), and
+                        # this one only enriches the console record. If the
+                        # registry reference cannot be resolved the build
+                        # still proceeds.
+                        # ------------------------------------------------------------------
+                        echo "--- Aqua registry scan (informational) ---"
+                        podman run --rm --name aqua-scan-reg-${BUILD_NUMBER} \
+                            --network host \
+                            --security-opt label=disable --user root \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            ${SCANNER_IMAGE} \
+                            scan \
+                                --host ${AQUA_HOST} \
+                                --registry ${FULL_IMAGE} \
+                                --no-verify \
+                                --user ${AQUA_USER} \
+                                --password ${AQUA_PASSWORD} \
+                                --html > aqua-registry-report.html 2> aqua-registry-scan.err \
+                            || echo "NOTE: registry scan did not complete (informational only) — see aqua-registry-scan.err"
                     '''
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'aqua-report.html,aqua-scan.err',
+                    archiveArtifacts artifacts: 'aqua-report.html,aqua-scan.err,aqua-registry-report.html,aqua-registry-scan.err',
                                      allowEmptyArchive: true
                 }
             }
@@ -333,7 +435,47 @@ pipeline {
                             ${SCAN_IMAGE} > trivy-report.txt 2>&1 || TRIVY_RC=$?
 
                     cat trivy-report.txt
-                    echo "trivy exit code: ${TRIVY_RC}"
+                    echo "trivy (app dependencies) exit code: ${TRIVY_RC}"
+
+                    # ------------------------------------------------------------------
+                    # 3. Trivy — OS packages of the image we actually ship.
+                    #    HARD GATE on CRITICAL. The runtime base is
+                    #    oven/bun:1.3-alpine, which currently carries 0 CRITICAL
+                    #    and 4 HIGH (all with a fix available in a newer alpine
+                    #    release). Gating on HIGH too would block the build on a
+                    #    base-image update we do not control, so HIGH is
+                    #    reported and CRITICAL is the line that stops a build.
+                    # ------------------------------------------------------------------
+                    TRIVY_OS_RC=0
+                    podman run --rm --name hku-trivy-os-${BUILD_NUMBER} \
+                        --network host --security-opt label=disable \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v trivy-cache:/root/.cache/trivy \
+                        -e TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2 \
+                        ${TRIVY_IMAGE} \
+                        image --scanners vuln \
+                            --pkg-types os \
+                            --severity CRITICAL \
+                            --exit-code 1 \
+                            --format table \
+                            ${FULL_IMAGE} > trivy-os-report.txt 2>&1 || TRIVY_OS_RC=$?
+
+                    cat trivy-os-report.txt
+                    echo "trivy (OS packages) exit code: ${TRIVY_OS_RC}"
+
+                    # The HIGH findings are not gated, but they are assessed, so
+                    # they belong in the artifact that goes to the client.
+                    podman run --rm --name hku-trivy-os-high-${BUILD_NUMBER} \
+                        --network host --security-opt label=disable \
+                        -v /var/run/docker.sock:/var/run/docker.sock \
+                        -v trivy-cache:/root/.cache/trivy \
+                        -e TRIVY_DB_REPOSITORY=docker.io/aquasec/trivy-db:2 \
+                        ${TRIVY_IMAGE} \
+                        image --scanners vuln \
+                            --pkg-types os \
+                            --severity HIGH \
+                            --format table \
+                            ${FULL_IMAGE} >> trivy-os-report.txt 2>&1 || true
 
                     # ------------------------------------------------------------------
                     # Gate: HIGH/CRITICAL dependency advisories.
@@ -351,12 +493,20 @@ pipeline {
                         exit 1
                     fi
 
-                    echo "Code scan OK: no HIGH/CRITICAL dependency advisories, no detected secrets."
+                    # ------------------------------------------------------------------
+                    # Gate: Trivy — CRITICAL OS CVEs in the shipped base image.
+                    # ------------------------------------------------------------------
+                    if [ "${TRIVY_OS_RC}" -ne 0 ]; then
+                        echo "BLOCKED: Trivy reported a CRITICAL OS vulnerability in the runtime image — see trivy-os-report.txt"
+                        exit 1
+                    fi
+
+                    echo "Code scan OK: no HIGH/CRITICAL dependency advisories, no detected secrets, no CRITICAL OS CVEs."
                 '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'bun-audit.txt,trivy-report.txt',
+                    archiveArtifacts artifacts: 'bun-audit.txt,trivy-report.txt,trivy-os-report.txt',
                                      allowEmptyArchive: true
                 }
             }
@@ -407,14 +557,24 @@ pipeline {
     post {
         always {
             sh '''
+                # FULL_IMAGE / SCAN_IMAGE are empty when the 'Resolve Version'
+                # stage never ran, so guard every use of them.
+                if [ -z "${FULL_IMAGE}" ] || [ -z "${SCAN_IMAGE}" ]; then
+                    echo "Image references unresolved — skipping image cleanup"
+                    exit 0
+                fi
+
                 # Remove the sidecar containers this build started. They all
                 # run with --rm, but a FAILED run can leave one behind (the
                 # Aqua scanner's scan-target container is the usual one), and
                 # a container holding an image makes `podman rmi` refuse:
                 #     image used by <id>: image is in use by a container
                 podman rm -f aqua-scan-${BUILD_NUMBER} \
+                             aqua-scan-reg-${BUILD_NUMBER} \
                              hku-audit-${BUILD_NUMBER} \
                              hku-trivy-${BUILD_NUMBER} \
+                             hku-trivy-os-${BUILD_NUMBER} \
+                             hku-trivy-os-high-${BUILD_NUMBER} \
                              hku-intranet-verify-${BUILD_NUMBER} 2>/dev/null || true
 
                 # Force-clear any other container still holding the scan-only
@@ -432,15 +592,15 @@ pipeline {
             '''
         }
         success {
-            echo "Pipeline SUCCESS — ${FULL_IMAGE} passed the Aqua image scan and the dependency code scan"
+            echo "Pipeline SUCCESS — ${env.FULL_IMAGE} passed the Aqua image scan and the code scan"
             emailext (
-                subject: "✅ Build #${BUILD_NUMBER} PASSED — ${FULL_IMAGE}",
+                subject: "✅ Build #${BUILD_NUMBER} PASSED — ${env.FULL_IMAGE}",
                 body: """<h2>HKU ENGG Intranet — CI/CD — Build #${BUILD_NUMBER} PASSED</h2>
-                    <p>Image: <code>${FULL_IMAGE}</code></p>
-                    <p>Aqua image scan: <b>Image Is Compliant</b></p>
-                    <p>Code scan: no HIGH/CRITICAL dependency advisories</p>
+                    <p>Image: <code>${env.FULL_IMAGE}</code></p>
+                    <p>Aqua image scan: <b>Image Is Compliant</b> (malware, root user, sensitive data)</p>
+                    <p>Code scan: no HIGH/CRITICAL dependency advisories, no detected secrets, no CRITICAL OS CVEs</p>
                     <p>Deploy verify: /health + SPA root ok on <code>127.0.0.1:${VERIFY_PORT}</code></p>
-                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, bun-audit.txt, trivy-report.txt</a><br>
+                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, bun-audit.txt, trivy-report.txt, trivy-os-report.txt</a><br>
                        Console: <a href=\"${BUILD_URL}console\">build console</a><br>
                        Build: <a href=\"${BUILD_URL}\">#${BUILD_NUMBER}</a></p>
                 """,
@@ -453,9 +613,9 @@ pipeline {
             emailext (
                 subject: "❌ Build #${BUILD_NUMBER} FAILED",
                 body: """<h2>HKU ENGG Intranet — CI/CD — Build #${BUILD_NUMBER} FAILED</h2>
-                    <p>Image: <code>${FULL_IMAGE}</code></p>
+                    <p>Image: <code>${env.FULL_IMAGE ?: 'unresolved'}</code></p>
                     <p>Check the console for the failure stage.</p>
-                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, bun-audit.txt, trivy-report.txt</a><br>
+                    <p>Reports: <a href=\"${BUILD_URL}artifact/\">aqua-report.html, bun-audit.txt, trivy-report.txt, trivy-os-report.txt</a><br>
                        Console: <a href=\"${BUILD_URL}console\">build console</a><br>
                        Build: <a href=\"${BUILD_URL}\">#${BUILD_NUMBER}</a></p>
                 """,

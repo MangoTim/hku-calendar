@@ -1,12 +1,16 @@
 # syntax=docker/dockerfile:1.7
 # HKU ENGG Intranet demo — single combined port (api + React bundle).
-# Build with oven/bun:1.3 (matches local dev), runs as bun:1.3-slim.
+# Build with oven/bun:1.3 (matches local dev), runtime on oven/bun:1.3-alpine.
 # Listens on $PORT (default 8093), serves /api/* + /health + static dist/.
 # DB stays on 192.168.147.103 — env vars below.
 
 ARG BUN_VERSION=1.3
 
 # ---------- Stage 1: install + build ----------
+# The builder stays on the Debian variant on purpose: vite's toolchain
+# (lightningcss, rolldown, esbuild) ships platform-native binaries and glibc
+# is what they are built against here. Nothing built in this stage is
+# executed at runtime, so the builder base can differ from the runtime base.
 FROM oven/bun:${BUN_VERSION} AS builder
 WORKDIR /app
 
@@ -23,7 +27,13 @@ COPY . .
 RUN bun run build
 
 # ---------- Stage 2: runtime ----------
-FROM oven/bun:${BUN_VERSION}-slim AS runtime
+# Alpine, not the Debian slim variant. The Debian base inherited 100
+# HIGH/CRITICAL CVEs (3 of them CRITICAL, all in perl-base) from
+# oven/bun:1.3-slim, and the client sees every one of them in the Aqua
+# console. The alpine base carries 4 HIGH / 0 CRITICAL instead.
+# Nothing here is a glibc binary: the shipped code is the vite bundle plus
+# pure-JS server deps (cors, express, jose, nodemailer, pg), so musl is safe.
+FROM oven/bun:${BUN_VERSION}-alpine AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production \
