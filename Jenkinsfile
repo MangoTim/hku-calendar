@@ -281,6 +281,28 @@ pipeline {
                 sh '''
                     set -eux
                     podman push ${FULL_IMAGE} --tls-verify=false
+
+                    # Prove that what the client pulls from the registry is
+                    # byte-identical to the image that was built here and then
+                    # scanned by Aqua / Trivy in the stages below. Without this
+                    # the scan evidence and the delivered artefact could in
+                    # principle be different images.
+                    REG_DIGEST=$(curl -s \
+                        -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json' \
+                        -o /dev/null -D - \
+                        "http://${REGISTRY}/v2/${IMAGE_NAME}/manifests/${IMAGE_VERSION}" \
+                        | tr -d '\r' | awk '/Docker-Content-Digest/ {print $2}')
+                    LOCAL_DIGEST=$(podman image inspect ${FULL_IMAGE} --format '{{.Digest}}')
+
+                    echo "registry digest : ${REG_DIGEST}"
+                    echo "local digest    : ${LOCAL_DIGEST}"
+
+                    if [ -n "${REG_DIGEST}" ] && [ "${REG_DIGEST}" = "${LOCAL_DIGEST}" ]; then
+                        echo "Digest check OK: the registry copy is byte-identical to the scanned image."
+                    else
+                        echo "BLOCKED: registry digest (${REG_DIGEST}) does not match the scanned image digest (${LOCAL_DIGEST})."
+                        exit 1
+                    fi
                 '''
             }
         }
