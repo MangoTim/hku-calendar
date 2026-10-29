@@ -352,10 +352,16 @@ pipeline {
                         # registry reference cannot be resolved the build
                         # still proceeds.
                         #
-                        # --register-compliant tells the console to file the
-                        # image under its registry reference, but only if it
-                        # passes the assurance policy — so a non-compliant
-                        # build never shows up in the console as a clean image.
+                        # Do NOT add --register / --register-compliant here.
+                        # Registration is a licence-counted operation, and the
+                        # console refuses it once the plan's repository limit
+                        # is reached ("the image license limit has been
+                        # exceeded"). It is also unnecessary: the local scan
+                        # above already scans the registry-qualified name
+                        # (192.168.147.105:8082/hku-intranet:<version>), so
+                        # the console files the image under that repository
+                        # and tag on its own — the client finds it by tag
+                        # without any explicit registration.
                         # ------------------------------------------------------------------
                         echo "--- Aqua registry scan (informational) ---"
                         podman run --rm --name aqua-scan-reg-${BUILD_NUMBER} \
@@ -369,7 +375,6 @@ pipeline {
                                 --no-verify \
                                 --user ${AQUA_USER} \
                                 --password ${AQUA_PASSWORD} \
-                                --register-compliant \
                                 --html \
                                 ${IMAGE_NAME}:${IMAGE_VERSION} \
                                 > aqua-registry-report.html 2> aqua-registry-scan.err \
