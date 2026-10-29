@@ -351,6 +351,11 @@ pipeline {
                         # this one only enriches the console record. If the
                         # registry reference cannot be resolved the build
                         # still proceeds.
+                        #
+                        # --register-compliant tells the console to file the
+                        # image under its registry reference, but only if it
+                        # passes the assurance policy — so a non-compliant
+                        # build never shows up in the console as a clean image.
                         # ------------------------------------------------------------------
                         echo "--- Aqua registry scan (informational) ---"
                         podman run --rm --name aqua-scan-reg-${BUILD_NUMBER} \
@@ -364,10 +369,13 @@ pipeline {
                                 --no-verify \
                                 --user ${AQUA_USER} \
                                 --password ${AQUA_PASSWORD} \
+                                --register-compliant \
                                 --html \
                                 ${IMAGE_NAME}:${IMAGE_VERSION} \
                                 > aqua-registry-report.html 2> aqua-registry-scan.err \
                             || echo "NOTE: registry scan did not complete (informational only) — see aqua-registry-scan.err"
+
+                        grep -oE "Image Is (Compliant|Non-compliant)" aqua-registry-report.html || true
                     '''
                 }
             }
